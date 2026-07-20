@@ -1,0 +1,6 @@
+fastapi
+httpx
+python-dotenv
+packaging
+redis
+python-multipart
