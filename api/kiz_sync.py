@@ -1,3 +1,4 @@
+import time
 import httpx
 from api.mpfit_cim_client import fetch_cim_map, resolve_order_numbers
 from api.insales_kiz_client import fetch_orders_missing_kiz, write_kiz
@@ -6,6 +7,7 @@ CIM_JOIN_SEPARATOR = ", "
 
 
 async def run_kiz_sync(dry_run: bool):
+  started_at = time.monotonic()
   async with httpx.AsyncClient(timeout=30) as client:
     candidates = await fetch_orders_missing_kiz(client)
     if not candidates:
@@ -15,6 +17,7 @@ async def run_kiz_sync(dry_run: bool):
         "matched": 0,
         "written": 0,
         "errors": [],
+        "duration_ms": int((time.monotonic() - started_at) * 1000),
       }
 
     cim_by_mpfit_order = await fetch_cim_map(client)
@@ -50,4 +53,5 @@ async def run_kiz_sync(dry_run: bool):
       "matched": len(matched),
       "written": written,
       "errors": errors,
+      "duration_ms": int((time.monotonic() - started_at) * 1000),
     }
