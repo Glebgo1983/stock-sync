@@ -37,7 +37,10 @@ async def fetch_variant_map(client):
     params = {
       "per_page": INSALES_PAGE_SIZE,
       "from_id": from_id,
-      "variant_fields": "id,title,product_id,sku,barcode,available,quantity",
+      # No variant_fields filter: confirmed against a real response that
+      # inSales silently drops `quantity` when variant_fields is passed,
+      # even when quantity is explicitly listed — it's only present on the
+      # full/default variant representation.
     }
     response = await _request_with_retry(client, "GET", url, params=params)
     products = response.json()

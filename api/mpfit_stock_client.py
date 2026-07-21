@@ -41,21 +41,29 @@ async def _post_with_retry(client, url, body, retries=2):
 
 def compute_available_qty(stocks):
   # `free` is unreserved stock for regular products; `can_collect` is what a
-  # smart-product (kit) can be assembled into on demand. A product only ever
-  # has one of the two meaningfully populated, so summing max() per warehouse
-  # covers both cases without a separate call to /products/list for product_type.
+  # smart-product (kit) can be assembled into on demand. Confirmed against a
+  # real /products/stocks response (2026-07-21): most rows have only one of
+  # the two populated, but a few had BOTH — with `can_collect` an order of
+  # magnitude larger than `free` (e.g. free=203, can_collect=9819 for a
+  # single, non-kit product). Taking max() there pushed 9819 as the sellable
+  # quantity into inSales, which was wrong — `can_collect` there evidently
+  # means something other than "additional sellable units" (likely a
+  # producible-from-raw-materials figure). `free`, when present and nonzero,
+  # is the trustworthy sellable count; `can_collect` is only used as a
+  # fallback when there's no free stock at all (the genuine kit case).
   total = 0
   for row in stocks or []:
     free = row.get("free") or 0
     can_collect = row.get("can_collect") or 0
-    total += max(free, can_collect)
+    total += free if free > 0 else can_collect
   return total
 
 
 async def fetch_stock_map(client):
-  # `id` is assumed to be mpFit's internal product id, used as the durable
-  # matching key (see api/product_map.py). Unverified against official docs —
-  # the docs site is JS-rendered and didn't expose field names when checked.
+  # `product_id` is mpFit's internal product id, used as the durable matching
+  # key (see api/product_map.py). Confirmed against a real /products/stocks
+  # response (2026-07-21) — the field is `product_id`, not `id` (which
+  # doesn't exist on these items at all; the earlier assumption was wrong).
   #
   # Returns both indexes: `by_article` (fallback/first-time matching, also
   # what /api/sync-stock summary counts) and `by_id` (primary ID-based
@@ -72,7 +80,7 @@ async def fetch_stock_map(client):
     for item in items:
       article = (item.get("article") or "").strip()
       qty = compute_available_qty(item.get("stocks"))
-      item_id = item.get("id")
+      item_id = item.get("product_id")
       mpfit_id = str(item_id) if item_id is not None else None
       if mpfit_id is not None:
         by_id[mpfit_id] = by_id.get(mpfit_id, 0) + qty

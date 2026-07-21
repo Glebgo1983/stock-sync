@@ -39,7 +39,10 @@ def parse_stock_event(body):
   """
   product = _extract_product_payload(body)
   article = (product.get("article") or "").strip()
-  item_id = product.get("id")
+  # Confirmed against a real /products/stocks response: the field is
+  # `product_id`. Webhook payload shape is still unconfirmed, so `id` stays
+  # as a fallback in case it differs there.
+  item_id = product.get("product_id", product.get("id"))
   mpfit_id = str(item_id) if item_id is not None else None
   stocks = product.get("stocks")
   has_stock_data = isinstance(stocks, list)

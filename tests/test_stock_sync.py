@@ -34,6 +34,17 @@ def test_compute_available_qty_handles_nulls_and_empty():
   assert compute_available_qty(None) == 0
 
 
+def test_compute_available_qty_prefers_free_when_both_populated():
+  # Real production incident (2026-07-21): mpFit returned free=203,
+  # can_collect=9819 for a plain (non-kit) product. max() picked 9819 and
+  # that got pushed to inSales as the sellable quantity, which was wrong —
+  # free is the trustworthy number whenever it's actually populated.
+  stocks = [
+    {"warehouse_id": 97, "free": 203, "booked": 2, "can_collect": 9819},
+  ]
+  assert compute_available_qty(stocks) == 203
+
+
 def _variant(variant_id, sku, product_id=1, title="T", quantity=0, barcode=None):
   return {
     "variant_id": variant_id, "product_id": product_id, "title": title,
