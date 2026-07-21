@@ -37,7 +37,7 @@ async def fetch_variant_map(client):
     params = {
       "per_page": INSALES_PAGE_SIZE,
       "from_id": from_id,
-      "variant_fields": "id,title,product_id,sku,barcode,available",
+      "variant_fields": "id,title,product_id,sku,barcode,available,quantity",
     }
     response = await _request_with_retry(client, "GET", url, params=params)
     products = response.json()
@@ -48,7 +48,14 @@ async def fetch_variant_map(client):
         sku = (variant.get("sku") or "").strip()
         if not sku:
           continue
-        variant_map.setdefault(sku, []).append(variant["id"])
+        variant_map.setdefault(sku, []).append({
+          "variant_id": variant["id"],
+          "product_id": variant.get("product_id"),
+          "title": variant.get("title") or product.get("title"),
+          "quantity": variant.get("quantity"),
+          "sku": sku,
+          "barcode": variant.get("barcode"),
+        })
     if len(products) < INSALES_PAGE_SIZE:
       break
     from_id = max(product["id"] for product in products) + 1
@@ -65,9 +72,15 @@ async def push_quantities(client, variant_id_to_qty):
   url = insales_base_url + "products/variants_group_update.json"
   batches = []
   for batch in _chunk(entries, INSALES_UPDATE_BATCH_SIZE):
+    variant_ids = [e["id"] for e in batch]
     try:
       response = await _request_with_retry(client, "PUT", url, json={"variants": batch})
-      batches.append({"size": len(batch), "status": response.status_code})
+      batches.append({"size": len(batch), "status": response.status_code, "variant_ids": variant_ids})
     except httpx.HTTPStatusError as e:
-      batches.append({"size": len(batch), "status": e.response.status_code, "error": e.response.text})
+      batches.append({
+        "size": len(batch),
+        "status": e.response.status_code,
+        "error": e.response.text,
+        "variant_ids": variant_ids,
+      })
   return batches

@@ -53,7 +53,16 @@ def compute_available_qty(stocks):
 
 
 async def fetch_stock_map(client):
-  stock_map = {}
+  # `id` is assumed to be mpFit's internal product id, used as the durable
+  # matching key (see api/product_map.py). Unverified against official docs —
+  # the docs site is JS-rendered and didn't expose field names when checked.
+  #
+  # Returns both indexes: `by_article` (fallback/first-time matching, also
+  # what /api/sync-stock summary counts) and `by_id` (primary ID-based
+  # lookup — includes items without an article, since a persisted link
+  # doesn't need one).
+  by_article = {}
+  by_id = {}
   last_id = 0
   while True:
     body = {"limit": MPFIT_PAGE_LIMIT, "last_id": last_id}
@@ -62,11 +71,15 @@ async def fetch_stock_map(client):
     items = result["data"]
     for item in items:
       article = (item.get("article") or "").strip()
-      if not article:
-        continue
       qty = compute_available_qty(item.get("stocks"))
-      stock_map[article] = stock_map.get(article, 0) + qty
+      item_id = item.get("id")
+      mpfit_id = str(item_id) if item_id is not None else None
+      if mpfit_id is not None:
+        by_id[mpfit_id] = by_id.get(mpfit_id, 0) + qty
+      if article:
+        entry = by_article.setdefault(article, {"qty": 0, "mpfit_id": mpfit_id})
+        entry["qty"] += qty
     if len(items) < MPFIT_PAGE_LIMIT or result.get("last_id") is None:
       break
     last_id = result["last_id"]
-  return stock_map
+  return {"by_article": by_article, "by_id": by_id}
