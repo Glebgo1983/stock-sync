@@ -38,7 +38,6 @@ statuses = {
 }
   
 async def new_order_handler(data):
-  r = redis.Redis.from_url(redis_url, decode_responses=True)
   async with httpx.AsyncClient() as client:
     products = await get_products(client, 0)
     items = get_order_items(data["order_lines"], products)
@@ -51,13 +50,19 @@ async def new_order_handler(data):
        Домофон: {check(data["shipping_address"]["doorphone"])};
        Способ доставки: {check (data["delivery_title"])}
        Комментарий к доставке: {check(data["shipping_address"]["comment"])};
-       
+
        Способ оплаты: {check(data["payment_title"])};
        Комментарий покупателя: {check(data["comment"])};
        Комментарий продавца: {check(data["manager_comment"])}
     """
     order_id = await create_order(client, items, note, data["id"])
-    r.set(f"insales-mpfit:{order_id}", "NEW")
+    # Status-cache write only -- must not block the order from being created
+    # in mpFit just because Redis is unavailable/unconfigured.
+    try:
+      r = redis.Redis.from_url(redis_url, decode_responses=True)
+      r.set(f"insales-mpfit:{order_id}", "NEW")
+    except Exception as e:
+      print(f"order status cache write failed (Redis unavailable?): {e}")
 
 async def get_products(client, last_id):
   url = mpfit + "products/list"
@@ -117,7 +122,15 @@ async def update_order(client, order, status):
   return 
 
 async def update_orders():
-  r = redis.Redis.from_url(redis_url, decode_responses=True)
+  try:
+    r = redis.Redis.from_url(redis_url, decode_responses=True)
+    r.ping()
+  except Exception as e:
+    # This whole feature (pushing mpFit delivery status back into inSales)
+    # is sourced entirely from the Redis-backed order cache written in
+    # new_order_handler -- with no Redis there is no list of orders to
+    # check, so there's nothing to gracefully degrade to.
+    return {"skipped": True, "reason": f"redis unavailable: {e}"}
   keys = r.keys("insales-mpfit:*")
   values = r.mget(keys)
   cached_orders = {key.replace("insales-mpfit:",""): value for key, value in zip(keys, values)}
