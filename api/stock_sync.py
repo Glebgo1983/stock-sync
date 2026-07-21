@@ -4,7 +4,7 @@ import httpx
 from api.mpfit_stock_client import fetch_stock_map
 from api.insales_stock_client import fetch_variant_map, push_quantities
 from api.product_map import load_product_map, save_links
-from api.sync_config import get_excluded_mpfit_ids, get_excluded_skus
+from api.sync_config import get_excluded_mpfit_ids, get_excluded_skus, get_sku_aliases
 from api.sync_journal import build_entry, record_run
 from api.sync_lock import sync_lock
 
@@ -12,7 +12,10 @@ UNMATCHED_SKU_PREVIEW_LIMIT = 50
 EXCLUDED_SKU_PREVIEW_LIMIT = 50
 
 
-def diff_variants(insales_map, mpfit_stock, product_map, excluded_skus=frozenset(), excluded_mpfit_ids=frozenset()):
+def diff_variants(
+  insales_map, mpfit_stock, product_map,
+  excluded_skus=frozenset(), excluded_mpfit_ids=frozenset(), sku_aliases=None,
+):
   """Match mpFit stock to inSales variants.
 
   Pass 1 trusts persisted ID-based links (product_map) — the primary
@@ -21,13 +24,18 @@ def diff_variants(insales_map, mpfit_stock, product_map, excluded_skus=frozenset
 
   Pass 2 falls back to article==sku matching for anything pass 1 didn't
   resolve (new products, or a persisted link whose inSales variant no longer
-  exists). Matches found this way are returned as `new_links` for the caller
-  to persist, so future runs resolve them in pass 1 instead.
+  exists). If the direct sku==article match misses, `sku_aliases`
+  (inSales sku -> mpFit article, env-configured, see api/sync_config.py) is
+  tried before giving up — for confirmed real cases where mpFit's article
+  carries a variant suffix inSales' sku doesn't have. Matches found this way
+  are returned as `new_links` for the caller to persist, so future runs
+  resolve them in pass 1 instead (by ID, no alias needed from then on).
 
   A product excluded by sku or by mpFit id (`excluded_skus` /
   `excluded_mpfit_ids`, sourced from env config) is skipped entirely in both
   passes — not pushed, not linked, not counted as unmatched.
   """
+  sku_aliases = sku_aliases or {}
   by_article = mpfit_stock["by_article"]
   by_id = mpfit_stock["by_id"]
   insales_by_variant_id = {
@@ -65,6 +73,8 @@ def diff_variants(insales_map, mpfit_stock, product_map, excluded_skus=frozenset
       excluded.add(sku)
       continue
     entry = by_article.get(sku)
+    if entry is None and sku in sku_aliases:
+      entry = by_article.get(sku_aliases[sku])
     if entry is None:
       if not any(variant["variant_id"] in matched for variant in variants):
         unmatched_skus.append(sku)
@@ -140,6 +150,7 @@ async def _run_stock_sync_locked(dry_run: bool):
       insales_map, mpfit_stock, product_map,
       excluded_skus=get_excluded_skus(),
       excluded_mpfit_ids=get_excluded_mpfit_ids(),
+      sku_aliases=get_sku_aliases(),
     )
 
     batches = []

@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from api import sync_lock as sync_lock_module
 from api.mpfit_stock_client import compute_available_qty
 from api.stock_sync import diff_variants, _build_journal_entries
-from api.sync_config import get_excluded_mpfit_ids, get_excluded_skus
+from api.sync_config import get_excluded_mpfit_ids, get_excluded_skus, get_sku_aliases
 from api.sync_journal import build_entry
 
 
@@ -208,6 +208,44 @@ def test_get_excluded_skus_empty_when_unset(monkeypatch):
 def test_get_excluded_mpfit_ids_parses_comma_separated_env(monkeypatch):
   monkeypatch.setenv("SYNC_EXCLUDED_MPFIT_IDS", "m1,m2")
   assert get_excluded_mpfit_ids() == {"m1", "m2"}
+
+
+def test_get_sku_aliases_parses_pairs(monkeypatch):
+  monkeypatch.setenv("SKU_ALIASES", "82FACECREAM002:82FACECREAM002/RICH, 82TUBINGMASCARA002:82TUBINGMASCARA002/BROWN")
+  assert get_sku_aliases() == {
+    "82FACECREAM002": "82FACECREAM002/RICH",
+    "82TUBINGMASCARA002": "82TUBINGMASCARA002/BROWN",
+  }
+
+
+def test_get_sku_aliases_empty_when_unset(monkeypatch):
+  monkeypatch.delenv("SKU_ALIASES", raising=False)
+  assert get_sku_aliases() == {}
+
+
+def test_diff_variants_resolves_via_sku_alias_when_direct_article_missing():
+  insales_map = {"82FACECREAM002": [_variant(1, "82FACECREAM002", quantity=54)]}
+  mpfit_stock = {
+    "by_article": {"82FACECREAM002/RICH": {"qty": 54, "mpfit_id": "m1"}},
+    "by_id": {"m1": 54},
+  }
+  matched, unmatched, excluded, new_links, stats = diff_variants(
+    insales_map, mpfit_stock, {}, sku_aliases={"82FACECREAM002": "82FACECREAM002/RICH"},
+  )
+  assert matched[1]["new_qty"] == 54
+  assert matched[1]["sku"] == "82FACECREAM002"
+  assert unmatched == []
+  assert new_links["m1"]["sku"] == "82FACECREAM002"
+
+
+def test_diff_variants_still_unmatched_when_alias_target_missing_from_mpfit():
+  insales_map = {"82SERUM002": [_variant(1, "82SERUM002", quantity=0)]}
+  mpfit_stock = {"by_article": {}, "by_id": {}}
+  matched, unmatched, excluded, new_links, stats = diff_variants(
+    insales_map, mpfit_stock, {}, sku_aliases={"82SERUM002": "82SERUM002/DOES-NOT-EXIST"},
+  )
+  assert matched == {}
+  assert unmatched == ["82SERUM002"]
 
 
 def test_lock_ttl_defaults_when_unset(monkeypatch):
