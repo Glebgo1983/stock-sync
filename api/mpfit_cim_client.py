@@ -1,15 +1,22 @@
 import os
 from api.mpfit_stock_client import mpfit_base_url, _post_with_retry
 
-CIM_PAGE_LIMIT = 200
 CIM_CODE_TRIM_LEN = 7
 
+# Starting point for the exponential search below. The feed's real tail was
+# ~12.76M when last measured (2026-07-21) via binary search (there is no API
+# support for "give me the end" directly, or for filtering by order at all —
+# both confirmed empirically). Starting near that instead of 0 keeps the
+# search to a handful of requests; it only gets slower (not wrong) as the
+# feed grows well past this, so it's fine to leave stale for a long time.
+CIM_TAIL_SEARCH_HINT = int(os.getenv("SYNC_KIZ_TAIL_HINT", "10000000"))
 
-def _cim_max_pages():
+
+def _recent_count():
   try:
-    return int(os.getenv("SYNC_KIZ_MAX_PAGES", "50"))
+    return int(os.getenv("SYNC_KIZ_RECENT_COUNT", "10"))
   except ValueError:
-    return 50
+    return 10
 
 
 def trim_cim(cim):
@@ -17,35 +24,61 @@ def trim_cim(cim):
   return code[:-CIM_CODE_TRIM_LEN] if len(code) > CIM_CODE_TRIM_LEN else code
 
 
-async def fetch_cim_map(client):
-  """Paginate mpFit's /cim-codes feed, grouping trimmed codes by mpFit order id.
+async def _has_data_after(client, last_id):
+  data = await _post_with_retry(client, mpfit_base_url + "cim-codes", {"limit": 1, "last_id": last_id})
+  return len(data["result"]["data"]) > 0
 
-  Confirmed empirically: the endpoint ignores every filter shape tried
-  (`filter.order_id`, `filter.order_ids`, `filter.ids`, a bare `order_id`) —
-  it's a flat feed walked only via `last_id`, so there's no way to ask for a
-  single order's codes directly. The feed spans every sales channel mpFit
-  fulfills (not just inSales) and only grows over time, so this scan is
-  capped at SYNC_KIZ_MAX_PAGES (default 50 pages / 10k codes) to avoid an
-  ever-slower walk eventually hitting the serverless execution time limit.
-  By design there's no persisted checkpoint (accepted tradeoff — see
-  README); orders whose codes fall past the cap won't be found until
-  reprocessed on a later run.
+
+async def _find_tail_last_id(client):
+  """Locate a last_id close to the current end of the /cim-codes feed.
+
+  Exponential search outward from CIM_TAIL_SEARCH_HINT to bracket the true
+  end, then binary search to converge on it. Costs roughly
+  2*log2(distance from hint to the true end) requests -- a handful in
+  practice as long as the hint stays in the right order of magnitude.
   """
+  lo = 0
+  hi = max(CIM_TAIL_SEARCH_HINT, 1)
+  if not await _has_data_after(client, hi):
+    # Hint overshot (feed shrank or hint was set too high) -- search inward.
+    lo, hi = 0, hi
+  else:
+    lo = hi
+    hi *= 2
+    while await _has_data_after(client, hi):
+      lo = hi
+      hi *= 2
+  while hi - lo > 1:
+    mid = (lo + hi) // 2
+    if await _has_data_after(client, mid):
+      lo = mid
+    else:
+      hi = mid
+  return lo
+
+
+async def fetch_recent_cim_map(client):
+  """Fetch only the most recent SYNC_KIZ_RECENT_COUNT codes (default 10),
+  grouped by mpFit order id, trimmed per business rule.
+
+  No persisted checkpoint by design (explicit request, to avoid a hard Redis
+  dependency) -- this always looks at whatever is newest on each run, not a
+  contiguous window since the last run. If more than SYNC_KIZ_RECENT_COUNT
+  codes land between runs, the ones in between are never seen. Accepted
+  tradeoff for a lightweight, Redis-free check; already-filled inSales
+  orders are skipped either way, so re-seeing the same recent codes on
+  every run is harmless.
+  """
+  tail_last_id = await _find_tail_last_id(client)
+  data = await _post_with_retry(
+    client, mpfit_base_url + "cim-codes", {"limit": _recent_count(), "last_id": tail_last_id},
+  )
   order_map = {}
-  last_id = 0
-  for _ in range(_cim_max_pages()):
-    body = {"limit": CIM_PAGE_LIMIT, "last_id": last_id}
-    data = await _post_with_retry(client, mpfit_base_url + "cim-codes", body)
-    result = data["result"]
-    items = result["data"]
-    for item in items:
-      order_id = item.get("order_id")
-      if order_id is None:
-        continue
-      order_map.setdefault(str(order_id), []).append(trim_cim(item.get("cim")))
-    if len(items) < CIM_PAGE_LIMIT or result.get("last_id") is None:
-      break
-    last_id = result["last_id"]
+  for item in data["result"]["data"]:
+    order_id = item.get("order_id")
+    if order_id is None:
+      continue
+    order_map.setdefault(str(order_id), []).append(trim_cim(item.get("cim")))
   return order_map
 
 
