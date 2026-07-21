@@ -22,8 +22,8 @@ load_dotenv(dotenv_path=".env.local")
 redis_url = os.getenv("REDIS_URL")
 mpfit_token = os.getenv("MPFIT_TOKEN")
 mpfit_headers = {"Authorization": f"Bearer {mpfit_token}", "Content-Type": "application/json"}
-insales_username = os.getenv("INSALES_USERNAME")
-insales_password = os.getenv("INSALES_PASSWORD")
+insales_username = os.getenv("INSALES_USERNAME") or ""
+insales_password = os.getenv("INSALES_PASSWORD") or ""
 insales_auth = httpx.BasicAuth(username=insales_username, password=insales_password)
 
 statuses = {
