@@ -1,7 +1,9 @@
 import time
 import httpx
 from api.mpfit_cim_client import fetch_recent_cim_map, resolve_order_numbers
-from api.insales_kiz_client import fetch_orders_missing_kiz, write_kiz
+from api.insales_kiz_client import fetch_orders_missing_kiz, write_kiz, write_mpfit_id
+from api.kiz_heuristic_match import fetch_all_mpfit_orders, match_candidates
+from api.sync_config import get_sku_aliases
 
 CIM_JOIN_SEPARATOR = ", "
 
@@ -37,6 +39,28 @@ async def run_kiz_sync(dry_run: bool):
       if number is not None:
         codes_by_number.setdefault(str(number), []).extend(codes)
 
+    # Second-line fallback for candidates still without an mpfit_id: `number`
+    # only works for orders this integration's own create_order actually ran
+    # for, which today is effectively none (inSales has no webhook configured
+    # to /api/create -- see project memory). Most real orders reach mpFit via
+    # ApiShip under mpFit's own auto-number instead, so match those by exact
+    # item-set (sku/article + quantity) plus a loose creation-time window.
+    # Mutates each candidate dict in place so the lookup below picks it up.
+    heuristic_errors = []
+    if needs_number_match:
+      mpfit_orders = await fetch_all_mpfit_orders(client)
+      heuristic_matches = match_candidates(needs_number_match, mpfit_orders, get_sku_aliases())
+      for candidate in needs_number_match:
+        mpfit_id = heuristic_matches.get(candidate["id"])
+        if not mpfit_id:
+          continue
+        candidate["mpfit_id"] = str(mpfit_id)
+        if not dry_run:
+          try:
+            await write_mpfit_id(client, candidate["id"], mpfit_id)
+          except httpx.HTTPStatusError as e:
+            heuristic_errors.append({"order_id": candidate["id"], "error": e.response.text})
+
     matched = []
     for candidate in candidates:
       if candidate.get("mpfit_id"):
@@ -47,7 +71,7 @@ async def run_kiz_sync(dry_run: bool):
         matched.append({"order_id": candidate["id"], "value": CIM_JOIN_SEPARATOR.join(codes)})
 
     written = 0
-    errors = []
+    errors = list(heuristic_errors)
     if not dry_run:
       for entry in matched:
         try:

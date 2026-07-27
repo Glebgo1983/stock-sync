@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from api.insales_stock_client import insales_base_url, _request_with_retry
 
 INSALES_ORDER_PAGE_SIZE = 100
@@ -57,11 +58,19 @@ async def fetch_orders_missing_kiz(client, max_orders=500):
     for order in orders:
       if _existing_kiz_value(order):
         continue
-      candidates.append({
+      mpfit_id = _existing_mpfit_id_value(order)
+      candidate = {
         "id": order["id"],
         "number": order.get("number"),
-        "mpfit_id": _existing_mpfit_id_value(order),
-      })
+        "mpfit_id": mpfit_id,
+      }
+      # order_lines/created_at are only needed by the heuristic matcher for
+      # candidates still missing an mpfit_id -- skip parsing them otherwise.
+      if not mpfit_id:
+        candidate["order_lines"] = order.get("order_lines") or []
+        created_at = order.get("created_at")
+        candidate["created_at"] = datetime.fromisoformat(created_at) if created_at else None
+      candidates.append(candidate)
     scanned += len(orders)
     if len(orders) < INSALES_ORDER_PAGE_SIZE:
       break
