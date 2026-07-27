@@ -14,6 +14,7 @@ import hashlib
 from dotenv import load_dotenv
 from api.cdek_functions import get_cdek_tracking_number
 from api.pochta_functions import get_pochta_tracking_number
+from api.insales_kiz_client import write_mpfit_id
 
 mpfit = "https://app.mpfit.ru/api/v1/"
 insales = "https://myshop-dbn10.myinsales.ru/admin/orders/"
@@ -63,6 +64,16 @@ async def new_order_handler(data):
       r.set(f"insales-mpfit:{order_id}", "NEW")
     except Exception as e:
       print(f"order status cache write failed (Redis unavailable?): {e}")
+    # Store mpFit's own order id back on the inSales order. This is the
+    # reliable join key for sync-kiz -- matching by mpFit's `number` field
+    # turned out untrustworthy (a real, shipped mpFit order for inSales
+    # order 1550088401 wasn't found under that number at all, 2026-07-27).
+    # Best-effort: must not block the order from being created just because
+    # this write failed.
+    try:
+      await write_mpfit_id(client, data["id"], order_id)
+    except Exception as e:
+      print(f"mpFit id write-back to inSales failed: {e}")
 
 async def get_products(client, last_id):
   url = mpfit + "products/list"

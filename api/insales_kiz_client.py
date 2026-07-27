@@ -9,10 +9,28 @@ INSALES_ORDER_PAGE_SIZE = 100
 # field is ever recreated (its id would change).
 KIZ_FIELD_ID = int(os.getenv("INSALES_KIZ_FIELD_ID", "134636313"))
 
+# id of the "MPfit id" custom order field -- stores the mpFit order's own
+# internal id, written at creation time (api/functions.py:new_order_handler)
+# right after mpFit returns it. Created 2026-07-27. This exists because
+# matching by mpFit's `number` field turned out unreliable: order 1550088401
+# had no mpFit order at all under that number despite a real, shipped mpFit
+# order existing for it -- `number` isn't a trustworthy join key. Storing the
+# id we already got back from mpFit at creation time removes the guesswork
+# entirely for any order created after this field existed. Orders created
+# before it have no value here and fall back to the old number-matching path.
+MPFIT_ID_FIELD_ID = int(os.getenv("INSALES_MPFIT_ID_FIELD_ID", "134982953"))
+
 
 def _existing_kiz_value(order):
   for fv in order.get("fields_values", []):
     if fv.get("field_id") == KIZ_FIELD_ID:
+      return fv.get("value")
+  return None
+
+
+def _existing_mpfit_id_value(order):
+  for fv in order.get("fields_values", []):
+    if fv.get("field_id") == MPFIT_ID_FIELD_ID:
       return fv.get("value")
   return None
 
@@ -39,7 +57,11 @@ async def fetch_orders_missing_kiz(client, max_orders=500):
     for order in orders:
       if _existing_kiz_value(order):
         continue
-      candidates.append({"id": order["id"], "number": order.get("number")})
+      candidates.append({
+        "id": order["id"],
+        "number": order.get("number"),
+        "mpfit_id": _existing_mpfit_id_value(order),
+      })
     scanned += len(orders)
     if len(orders) < INSALES_ORDER_PAGE_SIZE:
       break
@@ -50,4 +72,10 @@ async def fetch_orders_missing_kiz(client, max_orders=500):
 async def write_kiz(client, order_id, value):
   url = insales_base_url + f"orders/{order_id}.json"
   body = {"order": {"fields_values_attributes": [{"field_id": KIZ_FIELD_ID, "value": value}]}}
+  return await _request_with_retry(client, "PUT", url, json=body)
+
+
+async def write_mpfit_id(client, order_id, mpfit_id):
+  url = insales_base_url + f"orders/{order_id}.json"
+  body = {"order": {"fields_values_attributes": [{"field_id": MPFIT_ID_FIELD_ID, "value": str(mpfit_id)}]}}
   return await _request_with_retry(client, "PUT", url, json=body)

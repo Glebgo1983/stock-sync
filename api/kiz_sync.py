@@ -21,10 +21,16 @@ async def run_kiz_sync(dry_run: bool):
       }
 
     cim_by_mpfit_order = await fetch_recent_cim_map(client)
-    numbers = await resolve_order_numbers(client, cim_by_mpfit_order.keys())
 
-    # Regroup codes by mpFit order `number` -- for our own orders this equals
-    # the inSales order id, which is what we can match candidates against.
+    # Orders created after the "MPfit id" field existed (2026-07-27) carry
+    # their mpFit order id directly -- match those straight off
+    # cim_by_mpfit_order, no resolution needed. Older orders have no value
+    # there and fall back to the previous number-matching path, which
+    # requires resolving mpFit order id -> `number` first. `number` turned
+    # out unreliable as a join key on its own (see insales_kiz_client.py) --
+    # this fallback is best-effort for pre-existing orders only.
+    needs_number_match = [c for c in candidates if not c.get("mpfit_id")]
+    numbers = await resolve_order_numbers(client, cim_by_mpfit_order.keys()) if needs_number_match else {}
     codes_by_number = {}
     for mpfit_id, codes in cim_by_mpfit_order.items():
       number = numbers.get(mpfit_id)
@@ -33,7 +39,10 @@ async def run_kiz_sync(dry_run: bool):
 
     matched = []
     for candidate in candidates:
-      codes = codes_by_number.get(str(candidate["id"]))
+      if candidate.get("mpfit_id"):
+        codes = cim_by_mpfit_order.get(str(candidate["mpfit_id"]))
+      else:
+        codes = codes_by_number.get(str(candidate["id"]))
       if codes:
         matched.append({"order_id": candidate["id"], "value": CIM_JOIN_SEPARATOR.join(codes)})
 
