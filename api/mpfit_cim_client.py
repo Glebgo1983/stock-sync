@@ -12,11 +12,19 @@ CIM_CODE_TRIM_LEN = 7
 CIM_TAIL_SEARCH_HINT = int(os.getenv("SYNC_KIZ_TAIL_HINT", "10000000"))
 
 
+# The /cim-codes endpoint rejects any limit above this with a 422 (confirmed
+# empirically 2026-07-27 -- 1000 and 5000 both failed, 200 works). Clamping
+# here means a bad env value degrades to the safe max instead of taking the
+# whole sync down with an unhandled 500 on every run.
+CIM_CODES_MAX_LIMIT = 200
+
+
 def _recent_count():
   try:
-    return int(os.getenv("SYNC_KIZ_RECENT_COUNT", "10"))
+    value = int(os.getenv("SYNC_KIZ_RECENT_COUNT", "10"))
   except ValueError:
     return 10
+  return min(value, CIM_CODES_MAX_LIMIT)
 
 
 def trim_cim(cim):
