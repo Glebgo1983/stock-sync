@@ -22,7 +22,7 @@ async def run_kiz_sync(dry_run: bool):
         "duration_ms": int((time.monotonic() - started_at) * 1000),
       }
 
-    cim_by_mpfit_order = await fetch_cim_map_since_cursor(client)
+    cim_by_mpfit_order = await fetch_cim_map_since_cursor(client, persist=not dry_run)
 
     # Orders created after the "MPfit id" field existed (2026-07-27) carry
     # their mpFit order id directly -- match those straight off

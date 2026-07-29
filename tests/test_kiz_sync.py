@@ -59,6 +59,27 @@ async def test_fetch_cim_map_since_cursor_resumes_from_saved_cursor(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_fetch_cim_map_since_cursor_dry_run_does_not_move_cursor(monkeypatch):
+  # Regression: a dry run must not consume codes from the feed -- caught in
+  # production 2026-07-28 when a dry-run scan advanced the cursor past 6
+  # real matches it never wrote, and the next real run no longer saw them.
+  monkeypatch.setattr(mpfit_cim_client, "_load_cursor", lambda client: _async_result(1000))
+  saved = {}
+  monkeypatch.setattr(mpfit_cim_client, "_save_cursor", lambda value: saved.__setitem__("cursor", value))
+
+  async def fake_post(client, url, body):
+    return _cim_page(
+      [{"cim": "0104656757971108215H2CZn", "order_id": 42, "arrival_id": None, "product_id": 1}],
+      last_id=1050,
+    )
+
+  monkeypatch.setattr(mpfit_cim_client, "_post_with_retry", fake_post)
+  order_map = await fetch_cim_map_since_cursor(None, persist=False)
+  assert order_map == {"42": ["01046567579711082"]}
+  assert saved == {}
+
+
+@pytest.mark.asyncio
 async def test_fetch_cim_map_since_cursor_paginates_until_short_page(monkeypatch):
   monkeypatch.setattr(mpfit_cim_client, "_load_cursor", lambda client: _async_result(0))
   saved = {}

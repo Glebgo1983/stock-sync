@@ -102,7 +102,7 @@ def _save_cursor(value):
     print(f"cim cursor save failed (Redis unavailable?), next run will re-bootstrap: {e}")
 
 
-async def fetch_cim_map_since_cursor(client):
+async def fetch_cim_map_since_cursor(client, persist=True):
   """Fetch every /cim-codes record from the last run's saved cursor up to
   the current tail, grouped by mpFit order id, trimmed per business rule.
 
@@ -115,6 +115,13 @@ async def fetch_cim_map_since_cursor(client):
   run can never skip a record: worst case a big backlog takes a few runs
   (capped at CIM_SCAN_MAX_PAGES each) to fully catch up, never a permanent
   loss.
+
+  persist=False (dry runs) must not move the saved cursor forward -- caught
+  in testing 2026-07-28: a dry run scanned past 6 real matches without
+  writing them (dry_run never calls write_kiz), and because the cursor had
+  already advanced past those records, the very next *real* run no longer
+  saw them at all. Only a run that actually gets a chance to write its
+  matches should consume the cursor.
   """
   cursor = await _load_cursor(client)
   order_map = {}
@@ -134,7 +141,8 @@ async def fetch_cim_map_since_cursor(client):
       cursor = new_last_id
     if reached_end:
       break
-  _save_cursor(cursor)
+  if persist:
+    _save_cursor(cursor)
   return order_map
 
 
