@@ -1,6 +1,6 @@
 import time
 import httpx
-from api.mpfit_cim_client import fetch_recent_cim_map, resolve_order_numbers
+from api.mpfit_cim_client import fetch_cim_map_since_cursor, resolve_order_numbers
 from api.insales_kiz_client import fetch_orders_missing_kiz, write_kiz, write_mpfit_id
 from api.kiz_heuristic_match import fetch_all_mpfit_orders, match_candidates
 from api.sync_config import get_sku_aliases
@@ -22,7 +22,7 @@ async def run_kiz_sync(dry_run: bool):
         "duration_ms": int((time.monotonic() - started_at) * 1000),
       }
 
-    cim_by_mpfit_order = await fetch_recent_cim_map(client)
+    cim_by_mpfit_order = await fetch_cim_map_since_cursor(client)
 
     # Orders created after the "MPfit id" field existed (2026-07-27) carry
     # their mpFit order id directly -- match those straight off

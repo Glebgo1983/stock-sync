@@ -1,7 +1,10 @@
 import os
+import redis
 from api.mpfit_stock_client import mpfit_base_url, _post_with_retry
 
 CIM_CODE_TRIM_LEN = 7
+
+redis_url = os.getenv("REDIS_URL")
 
 # Starting point for the exponential search below. The feed's real tail was
 # ~12.76M when last measured (2026-07-21) via binary search (there is no API
@@ -9,22 +12,30 @@ CIM_CODE_TRIM_LEN = 7
 # both confirmed empirically). Starting near that instead of 0 keeps the
 # search to a handful of requests; it only gets slower (not wrong) as the
 # feed grows well past this, so it's fine to leave stale for a long time.
+# Only used now to bootstrap the cursor below on its very first run.
 CIM_TAIL_SEARCH_HINT = int(os.getenv("SYNC_KIZ_TAIL_HINT", "10000000"))
 
-
 # The /cim-codes endpoint rejects any limit above this with a 422 (confirmed
-# empirically 2026-07-27 -- 1000 and 5000 both failed, 200 works). Clamping
-# here means a bad env value degrades to the safe max instead of taking the
-# whole sync down with an unhandled 500 on every run.
+# empirically 2026-07-27 -- 1000 and 5000 both failed, 200 works).
 CIM_CODES_MAX_LIMIT = 200
 
+CIM_CURSOR_REDIS_KEY = "mpfit_sync:kiz_cim_cursor"
 
-def _recent_count():
-  try:
-    value = int(os.getenv("SYNC_KIZ_RECENT_COUNT", "10"))
-  except ValueError:
-    return 10
-  return min(value, CIM_CODES_MAX_LIMIT)
+# Caps how many pages a single run scans forward from the stored cursor --
+# keeps one run comfortably within mpFit's 60/min rate limit and
+# cron-job.org's 30s timeout (confirmed capped 2026-07-27, can't be raised).
+# If a run's real backlog is bigger than this, the cursor still advances as
+# far as it got and the next run picks up exactly there -- delayed, never
+# skipped.
+CIM_SCAN_MAX_PAGES = 40
+
+# One-time bootstrap only, when no cursor has been saved yet (first deploy
+# of this mechanism, or a fresh Redis instance): start this far back from
+# the real tail instead of from last_id 0, which would scan the entire
+# platform-wide feed history since it began. ~15 days of headroom at the
+# growth rate measured 2026-07-28 (~30k id units/day) -- generous enough to
+# catch any order still realistically awaiting its КИЗ code.
+CIM_CURSOR_BOOTSTRAP_LOOKBACK = 500_000
 
 
 def trim_cim(cim):
@@ -65,28 +76,65 @@ async def _find_tail_last_id(client):
   return lo
 
 
-async def fetch_recent_cim_map(client):
-  """Fetch only the most recent SYNC_KIZ_RECENT_COUNT codes (default 10),
-  grouped by mpFit order id, trimmed per business rule.
+def _redis():
+  return redis.Redis.from_url(redis_url, decode_responses=True)
 
-  No persisted checkpoint by design (explicit request, to avoid a hard Redis
-  dependency) -- this always looks at whatever is newest on each run, not a
-  contiguous window since the last run. If more than SYNC_KIZ_RECENT_COUNT
-  codes land between runs, the ones in between are never seen. Accepted
-  tradeoff for a lightweight, Redis-free check; already-filled inSales
-  orders are skipped either way, so re-seeing the same recent codes on
-  every run is harmless.
-  """
+
+async def _load_cursor(client):
+  try:
+    value = _redis().get(CIM_CURSOR_REDIS_KEY)
+  except Exception as e:
+    # Covers both a reachable-but-erroring Redis and REDIS_URL being unset
+    # entirely (from_url(None) raises AttributeError, not a RedisError) --
+    # either way, degrade to a fresh bootstrap rather than failing the sync.
+    print(f"cim cursor read failed, bootstrapping instead: {e}")
+    value = None
+  if value is not None:
+    return int(value)
   tail_last_id = await _find_tail_last_id(client)
-  data = await _post_with_retry(
-    client, mpfit_base_url + "cim-codes", {"limit": _recent_count(), "last_id": tail_last_id},
-  )
+  return max(tail_last_id - CIM_CURSOR_BOOTSTRAP_LOOKBACK, 0)
+
+
+def _save_cursor(value):
+  try:
+    _redis().set(CIM_CURSOR_REDIS_KEY, str(value))
+  except Exception as e:
+    print(f"cim cursor save failed (Redis unavailable?), next run will re-bootstrap: {e}")
+
+
+async def fetch_cim_map_since_cursor(client):
+  """Fetch every /cim-codes record from the last run's saved cursor up to
+  the current tail, grouped by mpFit order id, trimmed per business rule.
+
+  Replaces the old "last N records" recency window: that approach silently
+  and permanently lost codes once enough *other* mpFit clients' traffic (the
+  feed is shared platform-wide, not just this shop) pushed a code past the
+  small recent window before this integration's own order-matching caught up
+  to it -- confirmed happening in production 2026-07-28 (mpFit order
+  19508976, shipped 2026-07-26, КИЗ code lost). A persisted cursor means a
+  run can never skip a record: worst case a big backlog takes a few runs
+  (capped at CIM_SCAN_MAX_PAGES each) to fully catch up, never a permanent
+  loss.
+  """
+  cursor = await _load_cursor(client)
   order_map = {}
-  for item in data["result"]["data"]:
-    order_id = item.get("order_id")
-    if order_id is None:
-      continue
-    order_map.setdefault(str(order_id), []).append(trim_cim(item.get("cim")))
+  pages = 0
+  while pages < CIM_SCAN_MAX_PAGES:
+    data = await _post_with_retry(client, mpfit_base_url + "cim-codes", {"limit": 200, "last_id": cursor})
+    page = data["result"]["data"]
+    for item in page:
+      order_id = item.get("order_id")
+      if order_id is None:
+        continue
+      order_map.setdefault(str(order_id), []).append(trim_cim(item.get("cim")))
+    pages += 1
+    new_last_id = data["result"].get("last_id")
+    reached_end = len(page) < 200 or new_last_id is None
+    if new_last_id is not None:
+      cursor = new_last_id
+    if reached_end:
+      break
+  _save_cursor(cursor)
   return order_map
 
 
