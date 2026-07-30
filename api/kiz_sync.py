@@ -1,6 +1,7 @@
 import time
 import httpx
-from api.mpfit_cim_client import fetch_cim_map_since_cursor, resolve_order_numbers
+from api.mpfit_cim_client import fetch_cim_map_since_cursor, resolve_order_numbers, _load_cursor as _load_cim_cursor
+from api.mpfit_stock_client import mpfit_base_url, _post_with_retry
 from api.insales_kiz_client import fetch_orders_missing_kiz, write_kiz, write_mpfit_id
 from api.kiz_heuristic_match import fetch_all_mpfit_orders, match_candidates
 from api.sync_config import get_sku_aliases
@@ -92,11 +93,15 @@ async def run_kiz_sync(dry_run: bool, debug: bool = False):
       "duration_ms": int((time.monotonic() - started_at) * 1000),
     }
     if debug:
+      cim_cursor_used = await _load_cim_cursor(client)
+      raw_probe = await _post_with_retry(client, mpfit_base_url + "cim-codes", {"limit": 5, "last_id": cim_cursor_used})
       result["debug"] = {
         "candidates": [
           {"id": c["id"], "mpfit_id": c.get("mpfit_id")} for c in candidates
         ],
         "cim_keys_count": len(cim_by_mpfit_order),
         "matched_order_ids": [m["order_id"] for m in matched],
+        "cim_cursor_used": cim_cursor_used,
+        "cim_raw_probe": raw_probe["result"],
       }
     return result
