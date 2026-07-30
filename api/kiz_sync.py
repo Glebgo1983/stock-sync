@@ -2,11 +2,9 @@ import time
 import httpx
 from api.mpfit_cim_client import fetch_cim_map_since_cursor, resolve_order_numbers, _load_cursor as _load_cim_cursor, trim_cim
 from api.mpfit_stock_client import mpfit_base_url, _post_with_retry
-from api.insales_kiz_client import fetch_orders_missing_kiz, write_kiz, write_mpfit_id
+from api.insales_kiz_client import fetch_orders_missing_kiz, write_kiz, write_mpfit_id, CIM_JOIN_SEPARATOR
 from api.kiz_heuristic_match import fetch_all_mpfit_orders, match_candidates
 from api.sync_config import get_sku_aliases
-
-CIM_JOIN_SEPARATOR = ", "
 
 
 async def run_kiz_sync(dry_run: bool, debug: bool = False, probe_last_id: int = None, recovery_scan_from: int = None, recovery_scan_pages: int = 20):
@@ -102,14 +100,25 @@ async def run_kiz_sync(dry_run: bool, debug: bool = False, probe_last_id: int = 
           except httpx.HTTPStatusError as e:
             heuristic_errors.append({"order_id": candidate["id"], "error": e.response.text})
 
+    # Merge newly found codes with whatever the order already has (rather
+    # than overwriting) -- an order with multiple items/units can get its
+    # КИЗ codes across several runs as mpFit publishes them, and previously
+    # any single write permanently excluded the order from being rechecked
+    # (see _existing_kiz_value's old any-value-means-done check), silently
+    # dropping every code that arrived afterwards. Only counts as "matched"
+    # if there's at least one genuinely new code to add.
     matched = []
     for candidate in candidates:
       if candidate.get("mpfit_id"):
         codes = cim_by_mpfit_order.get(str(candidate["mpfit_id"]))
       else:
         codes = codes_by_number.get(str(candidate["id"]))
-      if codes:
-        matched.append({"order_id": candidate["id"], "value": CIM_JOIN_SEPARATOR.join(codes)})
+      if not codes:
+        continue
+      existing = candidate.get("existing_codes") or []
+      merged_codes = list(dict.fromkeys(existing + codes))
+      if len(merged_codes) > len(existing):
+        matched.append({"order_id": candidate["id"], "value": CIM_JOIN_SEPARATOR.join(merged_codes)})
 
     written = 0
     errors = list(heuristic_errors)

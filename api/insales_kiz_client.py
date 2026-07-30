@@ -5,6 +5,10 @@ from api.insales_stock_client import insales_base_url, _request_with_retry
 
 INSALES_ORDER_PAGE_SIZE = 100
 
+# Shared with kiz_sync.py: how multiple КИЗ codes for the same order are
+# joined into the single custom field's string value.
+CIM_JOIN_SEPARATOR = ", "
+
 redis_url = os.getenv("REDIS_URL")
 
 # Two independent cursors -- see fetch_orders_missing_kiz docstring for why
@@ -51,6 +55,22 @@ def _existing_kiz_value(order):
   return None
 
 
+def _existing_kiz_codes(order):
+  value = _existing_kiz_value(order)
+  return [c.strip() for c in value.split(CIM_JOIN_SEPARATOR) if c.strip()] if value else []
+
+
+def _expected_kiz_count(order_lines):
+  """Orders can have multiple items/units, each with its own КИЗ code -- an
+  order isn't fully resolved just because it has *a* value, only once it has
+  one code per unit. Falls back to 1 when order_lines is unavailable, same
+  as the old any-value-means-done behavior for that case.
+  """
+  if not order_lines:
+    return 1
+  return max(sum(int(line.get("quantity") or 1) for line in order_lines), 1)
+
+
 def _existing_mpfit_id_value(order):
   for fv in order.get("fields_values", []):
     if fv.get("field_id") == MPFIT_ID_FIELD_ID:
@@ -83,15 +103,18 @@ def _save_int(key, value):
 
 def _make_candidate(order):
   mpfit_id = _existing_mpfit_id_value(order)
+  order_lines = order.get("order_lines") or []
   candidate = {
     "id": order["id"],
     "number": order.get("number"),
     "mpfit_id": mpfit_id,
+    "existing_codes": _existing_kiz_codes(order),
+    "expected_kiz_count": _expected_kiz_count(order_lines),
   }
-  # order_lines/created_at are only needed by the heuristic matcher for
-  # candidates still missing an mpfit_id -- skip parsing them otherwise.
+  # created_at is only needed by the heuristic matcher for candidates still
+  # missing an mpfit_id -- skip parsing it otherwise.
   if not mpfit_id:
-    candidate["order_lines"] = order.get("order_lines") or []
+    candidate["order_lines"] = order_lines
     created_at = order.get("created_at")
     candidate["created_at"] = datetime.fromisoformat(created_at) if created_at else None
   return candidate
@@ -113,7 +136,9 @@ async def _scan_orders_missing_kiz(client, from_id, max_pages):
     if not orders:
       break
     for order in orders:
-      if _existing_kiz_value(order):
+      existing_codes = _existing_kiz_codes(order)
+      expected = _expected_kiz_count(order.get("order_lines") or [])
+      if len(existing_codes) >= expected:
         continue
       found_open = True
       candidates_by_id[order["id"]] = _make_candidate(order)
