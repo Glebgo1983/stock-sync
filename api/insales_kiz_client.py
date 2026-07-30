@@ -104,19 +104,19 @@ def _save_int(key, value):
 def _make_candidate(order):
   mpfit_id = _existing_mpfit_id_value(order)
   order_lines = order.get("order_lines") or []
+  created_at = order.get("created_at")
   candidate = {
     "id": order["id"],
     "number": order.get("number"),
     "mpfit_id": mpfit_id,
     "existing_codes": _existing_kiz_codes(order),
     "expected_kiz_count": _expected_kiz_count(order_lines),
+    "created_at": datetime.fromisoformat(created_at) if created_at else None,
   }
-  # created_at is only needed by the heuristic matcher for candidates still
-  # missing an mpfit_id -- skip parsing it otherwise.
+  # order_lines itself is only needed by the heuristic matcher for candidates
+  # still missing an mpfit_id -- skip keeping it around otherwise.
   if not mpfit_id:
     candidate["order_lines"] = order_lines
-    created_at = order.get("created_at")
-    candidate["created_at"] = datetime.fromisoformat(created_at) if created_at else None
   return candidate
 
 
