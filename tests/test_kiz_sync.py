@@ -5,25 +5,27 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import pytest
 from api import mpfit_cim_client
-from api.mpfit_cim_client import trim_cim, fetch_cim_map_since_cursor, CIM_SCAN_MAX_PAGES
+from api.mpfit_cim_client import clean_cim, fetch_cim_map_since_cursor, CIM_SCAN_MAX_PAGES
 
 
-def test_trim_cim_drops_last_seven_chars():
-  assert trim_cim("0104656757971108215H2CZn") == "01046567579711082"
+def test_clean_cim_passes_codes_through_untruncated():
+  # Previously dropped the last 7 chars as a business rule; the full mpFit
+  # code is now kept as-is -- only whitespace is stripped.
+  assert clean_cim("0104656757971108215H2CZn") == "0104656757971108215H2CZn"
 
 
-def test_trim_cim_handles_short_codes_without_erroring():
-  assert trim_cim("123") == "123"
-  assert trim_cim("1234567") == "1234567"
+def test_clean_cim_handles_short_codes_without_erroring():
+  assert clean_cim("123") == "123"
+  assert clean_cim("1234567") == "1234567"
 
 
-def test_trim_cim_handles_none_and_empty():
-  assert trim_cim(None) == ""
-  assert trim_cim("") == ""
+def test_clean_cim_handles_none_and_empty():
+  assert clean_cim(None) == ""
+  assert clean_cim("") == ""
 
 
-def test_trim_cim_strips_whitespace_before_trimming():
-  assert trim_cim("  0104656757971108215H2CZn  ") == "01046567579711082"
+def test_clean_cim_strips_whitespace():
+  assert clean_cim("  0104656757971108215H2CZn  ") == "0104656757971108215H2CZn"
 
 
 def _cim_page(items, last_id):
@@ -54,7 +56,7 @@ async def test_fetch_cim_map_since_cursor_resumes_from_saved_cursor(monkeypatch)
   monkeypatch.setattr(mpfit_cim_client, "_post_with_retry", fake_post)
   order_map = await fetch_cim_map_since_cursor(None)
   assert calls == [1000]
-  assert order_map == {"42": ["01046567579711082"]}
+  assert order_map == {"42": ["0104656757971108215H2CZn"]}
   assert saved["cursor"] == 1050
 
 
@@ -75,7 +77,7 @@ async def test_fetch_cim_map_since_cursor_dry_run_does_not_move_cursor(monkeypat
 
   monkeypatch.setattr(mpfit_cim_client, "_post_with_retry", fake_post)
   order_map = await fetch_cim_map_since_cursor(None, persist=False)
-  assert order_map == {"42": ["01046567579711082"]}
+  assert order_map == {"42": ["0104656757971108215H2CZn"]}
   assert saved == {}
 
 

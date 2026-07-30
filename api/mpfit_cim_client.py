@@ -2,8 +2,6 @@ import os
 import redis
 from api.mpfit_stock_client import mpfit_base_url, _post_with_retry
 
-CIM_CODE_TRIM_LEN = 7
-
 redis_url = os.getenv("REDIS_URL")
 
 # Starting point for the exponential search below. The feed's real tail was
@@ -38,9 +36,8 @@ CIM_SCAN_MAX_PAGES = 40
 CIM_CURSOR_BOOTSTRAP_LOOKBACK = 500_000
 
 
-def trim_cim(cim):
-  code = (cim or "").strip()
-  return code[:-CIM_CODE_TRIM_LEN] if len(code) > CIM_CODE_TRIM_LEN else code
+def clean_cim(cim):
+  return (cim or "").strip()
 
 
 async def _has_data_after(client, last_id):
@@ -104,7 +101,7 @@ def _save_cursor(value):
 
 async def fetch_cim_map_since_cursor(client, persist=True):
   """Fetch every /cim-codes record from the last run's saved cursor up to
-  the current tail, grouped by mpFit order id, trimmed per business rule.
+  the current tail, grouped by mpFit order id, passed through untruncated.
 
   Replaces the old "last N records" recency window: that approach silently
   and permanently lost codes once enough *other* mpFit clients' traffic (the
@@ -133,7 +130,7 @@ async def fetch_cim_map_since_cursor(client, persist=True):
       order_id = item.get("order_id")
       if order_id is None:
         continue
-      order_map.setdefault(str(order_id), []).append(trim_cim(item.get("cim")))
+      order_map.setdefault(str(order_id), []).append(clean_cim(item.get("cim")))
     pages += 1
     new_last_id = data["result"].get("last_id")
     reached_end = len(page) < 200 or new_last_id is None
