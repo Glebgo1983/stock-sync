@@ -144,7 +144,12 @@ async def run_kiz_sync(dry_run: bool, debug: bool = False, probe_last_id: int = 
       raw_probe = await _post_with_retry(client, mpfit_base_url + "cim-codes", {"limit": 5, "last_id": probe_id})
       result["debug"] = {
         "candidates": [
-          {"id": c["id"], "mpfit_id": c.get("mpfit_id")} for c in candidates
+          {
+            "id": c["id"],
+            "mpfit_id": c.get("mpfit_id"),
+            "existing_codes": c.get("existing_codes"),
+            "expected_kiz_count": c.get("expected_kiz_count"),
+          } for c in candidates
         ],
         "cim_keys_count": len(cim_by_mpfit_order),
         "matched_order_ids": [m["order_id"] for m in matched],
