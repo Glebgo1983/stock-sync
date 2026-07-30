@@ -28,6 +28,43 @@ async def run_kiz_sync(dry_run: bool, debug: bool = False, probe_last_id: int = 
 
     cim_by_mpfit_order = await fetch_cim_map_since_cursor(client, persist=not dry_run)
 
+    # One-off recovery for candidates whose КИЗ code already passed through
+    # mpFit's forward-only cim-codes cursor before this order was even
+    # considered a candidate (the old 500-cap order-scan bug meant recent
+    # orders weren't candidates yet when their code went by -- confirmed
+    # happening for mpfit id 19657458, 2026-07-30). Scans backward from an
+    # explicit earlier last_id, looking only for this run's candidates, and
+    # merges anything found into cim_by_mpfit_order so it flows through the
+    # normal matching/write path below like any other match.
+    recovery_debug = None
+    if recovery_scan_from is not None:
+      wanted = {str(c["mpfit_id"]) for c in candidates if c.get("mpfit_id")}
+      found = {}
+      cursor = recovery_scan_from
+      pages = 0
+      while pages < recovery_scan_pages:
+        data = await _post_with_retry(client, mpfit_base_url + "cim-codes", {"limit": 200, "last_id": cursor})
+        page = data["result"]["data"]
+        for item in page:
+          order_id = str(item.get("order_id"))
+          if order_id in wanted:
+            found.setdefault(order_id, []).append(trim_cim(item.get("cim")))
+        pages += 1
+        new_last_id = data["result"].get("last_id")
+        reached_end = len(page) < 200 or new_last_id is None
+        if new_last_id is not None:
+          cursor = new_last_id
+        if reached_end:
+          break
+      for order_id, codes in found.items():
+        cim_by_mpfit_order.setdefault(order_id, []).extend(codes)
+      recovery_debug = {
+        "scanned_from": recovery_scan_from,
+        "scanned_to": cursor,
+        "pages_scanned": pages,
+        "found": found,
+      }
+
     # Orders created after the "MPfit id" field existed (2026-07-27) carry
     # their mpFit order id directly -- match those straight off
     # cim_by_mpfit_order, no resolution needed. Older orders have no value
@@ -106,30 +143,9 @@ async def run_kiz_sync(dry_run: bool, debug: bool = False, probe_last_id: int = 
         "cim_probe_last_id": probe_id,
         "cim_raw_probe": raw_probe["result"],
       }
-      if recovery_scan_from is not None:
-        wanted = {str(c["mpfit_id"]) for c in candidates if c.get("mpfit_id")}
-        found = {}
-        cursor = recovery_scan_from
-        pages = 0
-        while pages < recovery_scan_pages:
-          data = await _post_with_retry(client, mpfit_base_url + "cim-codes", {"limit": 200, "last_id": cursor})
-          page = data["result"]["data"]
-          for item in page:
-            order_id = str(item.get("order_id"))
-            if order_id in wanted:
-              found.setdefault(order_id, []).append(trim_cim(item.get("cim")))
-          pages += 1
-          new_last_id = data["result"].get("last_id")
-          reached_end = len(page) < 200 or new_last_id is None
-          if new_last_id is not None:
-            cursor = new_last_id
-          if reached_end:
-            break
+      if recovery_debug is not None:
         result["debug"]["recovery_scan"] = {
-          "scanned_from": recovery_scan_from,
-          "scanned_to": cursor,
-          "pages_scanned": pages,
-          "reached_live_cursor": cursor >= cim_cursor_used,
-          "found": found,
+          **recovery_debug,
+          "reached_live_cursor": recovery_debug["scanned_to"] >= cim_cursor_used,
         }
     return result
