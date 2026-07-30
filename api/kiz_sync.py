@@ -1,18 +1,17 @@
 import time
 import httpx
-from api.mpfit_cim_client import fetch_cim_map_since_cursor, resolve_order_numbers, _load_cursor as _load_cim_cursor, trim_cim
-from api.mpfit_stock_client import mpfit_base_url, _post_with_retry
+from api.mpfit_cim_client import fetch_cim_map_since_cursor, resolve_order_numbers
 from api.insales_kiz_client import fetch_orders_missing_kiz, write_kiz, write_mpfit_id, CIM_JOIN_SEPARATOR
 from api.kiz_heuristic_match import fetch_all_mpfit_orders, match_candidates
 from api.sync_config import get_sku_aliases
 
 
-async def run_kiz_sync(dry_run: bool, debug: bool = False, probe_last_id: int = None, recovery_scan_from: int = None, recovery_scan_pages: int = 20):
+async def run_kiz_sync(dry_run: bool):
   started_at = time.monotonic()
   async with httpx.AsyncClient(timeout=30) as client:
     candidates = await fetch_orders_missing_kiz(client, persist=not dry_run)
     if not candidates:
-      result = {
+      return {
         "dry_run": dry_run,
         "candidates_checked": 0,
         "matched": 0,
@@ -20,48 +19,8 @@ async def run_kiz_sync(dry_run: bool, debug: bool = False, probe_last_id: int = 
         "errors": [],
         "duration_ms": int((time.monotonic() - started_at) * 1000),
       }
-      if debug:
-        result["debug"] = {"candidates": [], "cim_keys_count": 0}
-      return result
 
     cim_by_mpfit_order = await fetch_cim_map_since_cursor(client, persist=not dry_run)
-
-    # One-off recovery for candidates whose КИЗ code already passed through
-    # mpFit's forward-only cim-codes cursor before this order was even
-    # considered a candidate (the old 500-cap order-scan bug meant recent
-    # orders weren't candidates yet when their code went by -- confirmed
-    # happening for mpfit id 19657458, 2026-07-30). Scans backward from an
-    # explicit earlier last_id, looking only for this run's candidates, and
-    # merges anything found into cim_by_mpfit_order so it flows through the
-    # normal matching/write path below like any other match.
-    recovery_debug = None
-    if recovery_scan_from is not None:
-      wanted = {str(c["mpfit_id"]) for c in candidates if c.get("mpfit_id")}
-      found = {}
-      cursor = recovery_scan_from
-      pages = 0
-      while pages < recovery_scan_pages:
-        data = await _post_with_retry(client, mpfit_base_url + "cim-codes", {"limit": 200, "last_id": cursor})
-        page = data["result"]["data"]
-        for item in page:
-          order_id = str(item.get("order_id"))
-          if order_id in wanted:
-            found.setdefault(order_id, []).append(trim_cim(item.get("cim")))
-        pages += 1
-        new_last_id = data["result"].get("last_id")
-        reached_end = len(page) < 200 or new_last_id is None
-        if new_last_id is not None:
-          cursor = new_last_id
-        if reached_end:
-          break
-      for order_id, codes in found.items():
-        cim_by_mpfit_order.setdefault(order_id, []).extend(codes)
-      recovery_debug = {
-        "scanned_from": recovery_scan_from,
-        "scanned_to": cursor,
-        "pages_scanned": pages,
-        "found": found,
-      }
 
     # Orders created after the "MPfit id" field existed (2026-07-27) carry
     # their mpFit order id directly -- match those straight off
@@ -102,11 +61,10 @@ async def run_kiz_sync(dry_run: bool, debug: bool = False, probe_last_id: int = 
 
     # Merge newly found codes with whatever the order already has (rather
     # than overwriting) -- an order with multiple items/units can get its
-    # КИЗ codes across several runs as mpFit publishes them, and previously
-    # any single write permanently excluded the order from being rechecked
-    # (see _existing_kiz_value's old any-value-means-done check), silently
-    # dropping every code that arrived afterwards. Only counts as "matched"
-    # if there's at least one genuinely new code to add.
+    # КИЗ codes across several runs as mpFit publishes them, and a candidate
+    # stays open (see insales_kiz_client.py's expected_kiz_count check) until
+    # it has one code per unit. Only counts as "matched" if there's at least
+    # one genuinely new code to add.
     matched = []
     for candidate in candidates:
       if candidate.get("mpfit_id"):
@@ -130,7 +88,7 @@ async def run_kiz_sync(dry_run: bool, debug: bool = False, probe_last_id: int = 
         except httpx.HTTPStatusError as e:
           errors.append({"order_id": entry["order_id"], "error": e.response.text})
 
-    result = {
+    return {
       "dry_run": dry_run,
       "candidates_checked": len(candidates),
       "matched": len(matched),
@@ -138,28 +96,3 @@ async def run_kiz_sync(dry_run: bool, debug: bool = False, probe_last_id: int = 
       "errors": errors,
       "duration_ms": int((time.monotonic() - started_at) * 1000),
     }
-    if debug:
-      cim_cursor_used = await _load_cim_cursor(client)
-      probe_id = probe_last_id if probe_last_id is not None else cim_cursor_used
-      raw_probe = await _post_with_retry(client, mpfit_base_url + "cim-codes", {"limit": 5, "last_id": probe_id})
-      result["debug"] = {
-        "candidates": [
-          {
-            "id": c["id"],
-            "mpfit_id": c.get("mpfit_id"),
-            "existing_codes": c.get("existing_codes"),
-            "expected_kiz_count": c.get("expected_kiz_count"),
-          } for c in candidates
-        ],
-        "cim_keys_count": len(cim_by_mpfit_order),
-        "matched_order_ids": [m["order_id"] for m in matched],
-        "cim_cursor_used": cim_cursor_used,
-        "cim_probe_last_id": probe_id,
-        "cim_raw_probe": raw_probe["result"],
-      }
-      if recovery_debug is not None:
-        result["debug"]["recovery_scan"] = {
-          **recovery_debug,
-          "reached_live_cursor": recovery_debug["scanned_to"] >= cim_cursor_used,
-        }
-    return result
