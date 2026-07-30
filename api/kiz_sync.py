@@ -11,7 +11,7 @@ CIM_JOIN_SEPARATOR = ", "
 async def run_kiz_sync(dry_run: bool):
   started_at = time.monotonic()
   async with httpx.AsyncClient(timeout=30) as client:
-    candidates = await fetch_orders_missing_kiz(client)
+    candidates = await fetch_orders_missing_kiz(client, persist=not dry_run)
     if not candidates:
       return {
         "dry_run": dry_run,
