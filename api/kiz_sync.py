@@ -6,12 +6,12 @@ from api.kiz_heuristic_match import fetch_all_mpfit_orders, match_candidates
 from api.sync_config import get_sku_aliases
 
 
-async def run_kiz_sync(dry_run: bool, debug: bool = False):
+async def run_kiz_sync(dry_run: bool):
   started_at = time.monotonic()
   async with httpx.AsyncClient(timeout=30) as client:
     candidates = await fetch_orders_missing_kiz(client, persist=not dry_run)
     if not candidates:
-      result = {
+      return {
         "dry_run": dry_run,
         "candidates_checked": 0,
         "matched": 0,
@@ -19,9 +19,6 @@ async def run_kiz_sync(dry_run: bool, debug: bool = False):
         "errors": [],
         "duration_ms": int((time.monotonic() - started_at) * 1000),
       }
-      if debug:
-        result["debug"] = {"candidates": []}
-      return result
 
     cim_by_mpfit_order = await fetch_cim_map_since_cursor(client, persist=not dry_run)
 
@@ -91,7 +88,7 @@ async def run_kiz_sync(dry_run: bool, debug: bool = False):
         except httpx.HTTPStatusError as e:
           errors.append({"order_id": entry["order_id"], "error": e.response.text})
 
-    result = {
+    return {
       "dry_run": dry_run,
       "candidates_checked": len(candidates),
       "matched": len(matched),
@@ -99,17 +96,3 @@ async def run_kiz_sync(dry_run: bool, debug: bool = False):
       "errors": errors,
       "duration_ms": int((time.monotonic() - started_at) * 1000),
     }
-    if debug:
-      result["debug"] = {
-        "candidates": [
-          {
-            "id": c["id"],
-            "number": c.get("number"),
-            "mpfit_id": c.get("mpfit_id"),
-            "existing_codes": c.get("existing_codes"),
-            "expected_kiz_count": c.get("expected_kiz_count"),
-            "created_at": c["created_at"].isoformat() if c.get("created_at") else None,
-          } for c in candidates
-        ],
-      }
-    return result

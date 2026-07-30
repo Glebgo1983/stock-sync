@@ -59,9 +59,8 @@ async def sync_kiz_handler(request: Request):
     if not cron_secret or request.headers.get("authorization") != f"Bearer {cron_secret}":
         return Response(status_code=401)
     dry_run = request.query_params.get("dry_run", "false").lower() == "true"
-    debug = request.query_params.get("debug", "false").lower() == "true"
     try:
-        result = await run_kiz_sync(dry_run, debug)
+        result = await run_kiz_sync(dry_run)
         return result
     except Exception as e:
         print(e)
