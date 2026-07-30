@@ -9,7 +9,7 @@ from api.sync_config import get_sku_aliases
 CIM_JOIN_SEPARATOR = ", "
 
 
-async def run_kiz_sync(dry_run: bool, debug: bool = False):
+async def run_kiz_sync(dry_run: bool, debug: bool = False, probe_last_id: int = None):
   started_at = time.monotonic()
   async with httpx.AsyncClient(timeout=30) as client:
     candidates = await fetch_orders_missing_kiz(client, persist=not dry_run)
@@ -94,7 +94,8 @@ async def run_kiz_sync(dry_run: bool, debug: bool = False):
     }
     if debug:
       cim_cursor_used = await _load_cim_cursor(client)
-      raw_probe = await _post_with_retry(client, mpfit_base_url + "cim-codes", {"limit": 5, "last_id": cim_cursor_used})
+      probe_id = probe_last_id if probe_last_id is not None else cim_cursor_used
+      raw_probe = await _post_with_retry(client, mpfit_base_url + "cim-codes", {"limit": 5, "last_id": probe_id})
       result["debug"] = {
         "candidates": [
           {"id": c["id"], "mpfit_id": c.get("mpfit_id")} for c in candidates
@@ -102,6 +103,7 @@ async def run_kiz_sync(dry_run: bool, debug: bool = False):
         "cim_keys_count": len(cim_by_mpfit_order),
         "matched_order_ids": [m["order_id"] for m in matched],
         "cim_cursor_used": cim_cursor_used,
+        "cim_probe_last_id": probe_id,
         "cim_raw_probe": raw_probe["result"],
       }
     return result

@@ -60,8 +60,10 @@ async def sync_kiz_handler(request: Request):
         return Response(status_code=401)
     dry_run = request.query_params.get("dry_run", "false").lower() == "true"
     debug = request.query_params.get("debug", "false").lower() == "true"
+    probe_last_id_param = request.query_params.get("probe_last_id")
+    probe_last_id = int(probe_last_id_param) if probe_last_id_param else None
     try:
-        result = await run_kiz_sync(dry_run, debug)
+        result = await run_kiz_sync(dry_run, debug, probe_last_id)
         return result
     except Exception as e:
         print(e)
