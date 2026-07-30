@@ -8,6 +8,7 @@ from api.functions import new_order_handler, update_orders
 from api.mpfit_webhook import handle_stock_event, webhook_secret
 from api.stock_sync import run_stock_sync
 from api.kiz_sync import run_kiz_sync
+from api.kiz_correction import run_kiz_correction
 from api.sync_journal import get_summary, get_recent_entries
 #from api.handlers import set_time, update, clear_keys, hash_password
 from urllib.parse import unquote, urlparse
@@ -61,6 +62,19 @@ async def sync_kiz_handler(request: Request):
     dry_run = request.query_params.get("dry_run", "false").lower() == "true"
     try:
         result = await run_kiz_sync(dry_run)
+        return result
+    except Exception as e:
+        print(e)
+        return Response(status_code=500, content=str(e))
+
+@app.get('/api/kiz-correction')
+async def kiz_correction_handler(request: Request):
+    if not cron_secret or request.headers.get("authorization") != f"Bearer {cron_secret}":
+        return Response(status_code=401)
+    dry_run = request.query_params.get("dry_run", "false").lower() == "true"
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            result = await run_kiz_correction(client, dry_run)
         return result
     except Exception as e:
         print(e)
