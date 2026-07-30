@@ -1,6 +1,6 @@
 import time
 import httpx
-from api.mpfit_cim_client import fetch_cim_map_since_cursor, resolve_order_numbers, _load_cursor as _load_cim_cursor
+from api.mpfit_cim_client import fetch_cim_map_since_cursor, resolve_order_numbers, _load_cursor as _load_cim_cursor, trim_cim
 from api.mpfit_stock_client import mpfit_base_url, _post_with_retry
 from api.insales_kiz_client import fetch_orders_missing_kiz, write_kiz, write_mpfit_id
 from api.kiz_heuristic_match import fetch_all_mpfit_orders, match_candidates
@@ -9,7 +9,7 @@ from api.sync_config import get_sku_aliases
 CIM_JOIN_SEPARATOR = ", "
 
 
-async def run_kiz_sync(dry_run: bool, debug: bool = False, probe_last_id: int = None):
+async def run_kiz_sync(dry_run: bool, debug: bool = False, probe_last_id: int = None, recovery_scan_from: int = None, recovery_scan_pages: int = 20):
   started_at = time.monotonic()
   async with httpx.AsyncClient(timeout=30) as client:
     candidates = await fetch_orders_missing_kiz(client, persist=not dry_run)
@@ -106,4 +106,30 @@ async def run_kiz_sync(dry_run: bool, debug: bool = False, probe_last_id: int = 
         "cim_probe_last_id": probe_id,
         "cim_raw_probe": raw_probe["result"],
       }
+      if recovery_scan_from is not None:
+        wanted = {str(c["mpfit_id"]) for c in candidates if c.get("mpfit_id")}
+        found = {}
+        cursor = recovery_scan_from
+        pages = 0
+        while pages < recovery_scan_pages:
+          data = await _post_with_retry(client, mpfit_base_url + "cim-codes", {"limit": 200, "last_id": cursor})
+          page = data["result"]["data"]
+          for item in page:
+            order_id = str(item.get("order_id"))
+            if order_id in wanted:
+              found.setdefault(order_id, []).append(trim_cim(item.get("cim")))
+          pages += 1
+          new_last_id = data["result"].get("last_id")
+          reached_end = len(page) < 200 or new_last_id is None
+          if new_last_id is not None:
+            cursor = new_last_id
+          if reached_end:
+            break
+        result["debug"]["recovery_scan"] = {
+          "scanned_from": recovery_scan_from,
+          "scanned_to": cursor,
+          "pages_scanned": pages,
+          "reached_live_cursor": cursor >= cim_cursor_used,
+          "found": found,
+        }
     return result

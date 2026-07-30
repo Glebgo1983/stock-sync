@@ -62,8 +62,11 @@ async def sync_kiz_handler(request: Request):
     debug = request.query_params.get("debug", "false").lower() == "true"
     probe_last_id_param = request.query_params.get("probe_last_id")
     probe_last_id = int(probe_last_id_param) if probe_last_id_param else None
+    recovery_scan_from_param = request.query_params.get("recovery_scan_from")
+    recovery_scan_from = int(recovery_scan_from_param) if recovery_scan_from_param else None
+    recovery_scan_pages = int(request.query_params.get("recovery_scan_pages", "20"))
     try:
-        result = await run_kiz_sync(dry_run, debug, probe_last_id)
+        result = await run_kiz_sync(dry_run, debug, probe_last_id, recovery_scan_from, recovery_scan_pages)
         return result
     except Exception as e:
         print(e)
