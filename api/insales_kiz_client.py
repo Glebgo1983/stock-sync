@@ -1,3 +1,4 @@
+import html
 import os
 import redis
 from datetime import datetime
@@ -56,7 +57,13 @@ def _existing_kiz_value(order):
 
 
 def _existing_kiz_codes(order):
-  value = _existing_kiz_value(order)
+  # inSales returns this TextField's value with special characters
+  # (', <, &, ...) HTML-entity-encoded (e.g. "'" -> "&#39;") -- confirmed
+  # 2026-07-31 when a raw-vs-encoded mismatch made a correction script
+  # rewrite the same two codes back and forth forever, every run. Decoding
+  # here keeps every comparison against mpFit's raw codes correct no matter
+  # how inSales chooses to represent the stored value.
+  value = html.unescape(_existing_kiz_value(order) or "")
   return [c.strip() for c in value.split(CIM_JOIN_SEPARATOR) if c.strip()] if value else []
 
 
