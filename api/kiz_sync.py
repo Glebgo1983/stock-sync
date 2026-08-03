@@ -2,7 +2,7 @@ import time
 import httpx
 from api.mpfit_cim_client import fetch_cim_map_since_cursor, resolve_order_numbers
 from api.insales_kiz_client import fetch_orders_missing_kiz, write_kiz, write_mpfit_id, CIM_JOIN_SEPARATOR
-from api.kiz_heuristic_match import fetch_all_mpfit_orders, match_candidates
+from api.kiz_heuristic_match import fetch_all_mpfit_orders, match_candidates, match_by_ask_number
 from api.sync_config import get_sku_aliases
 
 
@@ -47,9 +47,22 @@ async def run_kiz_sync(dry_run: bool):
     heuristic_errors = []
     if needs_number_match:
       mpfit_orders = await fetch_all_mpfit_orders(client)
-      heuristic_matches = match_candidates(needs_number_match, mpfit_orders, get_sku_aliases())
+      # Try the ASK-number pattern first -- a direct, far more reliable join
+      # key than item-set matching where it applies (see
+      # kiz_heuristic_match.match_by_ask_number). Mpfit orders it already
+      # claimed are excluded from the item-set index below so the two
+      # passes can never both claim the same mpFit order.
+      ask_matches = match_by_ask_number(needs_number_match, mpfit_orders)
+      still_unmatched = [c for c in needs_number_match if c["id"] not in ask_matches]
+      claimed_mpfit_ids = set(ask_matches.values())
+      remaining_mpfit_orders = [o for o in mpfit_orders if o["id"] not in claimed_mpfit_ids]
+      heuristic_matches = (
+        match_candidates(still_unmatched, remaining_mpfit_orders, get_sku_aliases())
+        if still_unmatched else {}
+      )
+      combined_matches = {**heuristic_matches, **ask_matches}
       for candidate in needs_number_match:
-        mpfit_id = heuristic_matches.get(candidate["id"])
+        mpfit_id = combined_matches.get(candidate["id"])
         if not mpfit_id:
           continue
         candidate["mpfit_id"] = str(mpfit_id)

@@ -1,7 +1,23 @@
+import re
 from datetime import datetime, timedelta
 from api.mpfit_stock_client import mpfit_base_url, _post_with_retry
 
 MPFIT_ORDERS_PAGE_SIZE = 200
+
+# ApiShip encodes the inSales order's own display `number` into mpFit's
+# order `number` field for orders placed via Yandex Delivery, as
+# "YANDEX-ASK<number>" -- discovered 2026-08-03 investigating inSales order
+# #1115 (a single-item order of a common product, which the item+time
+# heuristic below couldn't disambiguate: 51 unrelated mpFit orders shared
+# its exact signature within MATCH_TIME_WINDOW). Confirmed against the
+# *entire* mpFit order history (2026-08-03): 11/11 orders with "ASK" in
+# their number use this exact "YANDEX-" prefix, no other variant seen --
+# including id 19657458 (number "YANDEX-ASK1088"), which independently
+# matches inSales order 1554245481 (number 1088), already confirmed correct
+# by hand in an earlier cim-code recovery. Far more reliable than item-set
+# matching where it applies; only candidates still unmatched after this
+# need the heuristic fallback.
+ASK_NUMBER_RE = re.compile(r'ASK0*(\d+)\s*$', re.IGNORECASE)
 
 # Confirmed real-world gap between an inSales order's created_at and its
 # matching mpFit order's created_at was ~14h (inSales 1550088401 -> mpFit
@@ -54,6 +70,41 @@ def _build_signature_index(mpfit_orders, sku_aliases=None):
     signature = _item_signature(items, sku_aliases)
     index.setdefault(signature, []).append(order)
   return index
+
+
+def match_by_ask_number(candidates, mpfit_orders):
+  """Match candidates lacking mpfit_id via the "YANDEX-ASK<number>" pattern
+  (see ASK_NUMBER_RE above) against each candidate's own inSales display
+  `number`. Same one-match-only and global-uniqueness rules as
+  match_candidates below, for the same reason: never guess.
+  """
+  index = {}
+  for order in mpfit_orders:
+    number = order.get("number")
+    if not number:
+      continue
+    m = ASK_NUMBER_RE.search(str(number))
+    if not m:
+      continue
+    index.setdefault(int(m.group(1)), []).append(order)
+
+  matches = {}
+  for candidate in candidates:
+    number = candidate.get("number")
+    if number is None:
+      continue
+    same = index.get(int(number))
+    if same and len(same) == 1:
+      matches[candidate["id"]] = same[0]["id"]
+
+  claim_counts = {}
+  for mpfit_id in matches.values():
+    claim_counts[mpfit_id] = claim_counts.get(mpfit_id, 0) + 1
+  return {
+    candidate_id: mpfit_id
+    for candidate_id, mpfit_id in matches.items()
+    if claim_counts[mpfit_id] == 1
+  }
 
 
 def match_candidates(candidates, mpfit_orders, sku_aliases=None):
