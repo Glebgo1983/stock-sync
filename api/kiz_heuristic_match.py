@@ -49,8 +49,15 @@ MATCH_TIME_WINDOW = timedelta(days=5)
 
 
 def _item_signature(items, sku_aliases=None):
+  # sku can be None -- an inSales order_line without a linked product/variant
+  # (e.g. a manually added line item) has sku=None. sorted() then compares
+  # tuples element-by-element and hits `None < "some-article"`, a TypeError,
+  # the moment such a line sits alongside any normal one. Coercing to "" is
+  # safe: real mpFit articles are never empty (items lacking one are already
+  # filtered out in _build_signature_index), so this only ever produces a
+  # signature that legitimately fails to match anything, never a wrong match.
   sku_aliases = sku_aliases or {}
-  pairs = [(sku_aliases.get(sku, sku), quantity) for sku, quantity in items]
+  pairs = [(sku_aliases.get(sku, sku) or "", quantity) for sku, quantity in items]
   return tuple(sorted(pairs))
 
 

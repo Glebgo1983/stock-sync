@@ -1,9 +1,10 @@
 import os
 import sys
+from datetime import datetime
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from api.kiz_heuristic_match import match_by_ask_number
+from api.kiz_heuristic_match import match_by_ask_number, match_candidates
 
 
 def _mpfit_order(mpfit_id, number):
@@ -44,3 +45,39 @@ def test_match_by_ask_number_skips_candidates_without_number():
   candidates = [_candidate("insales-1", None)]
   mpfit_orders = [_mpfit_order(1, "YANDEX-ASK1088")]
   assert match_by_ask_number(candidates, mpfit_orders) == {}
+
+
+def test_match_candidates_handles_order_line_without_sku():
+  # inSales order_line.sku can be None (e.g. a manually added line item
+  # with no linked product/variant). Sorting the item signature must not
+  # crash trying to compare None against a real article string -- confirmed
+  # this happened live 2026-08-21 the first time a real order like this
+  # reached this code path (500 Internal Server Error, "'<' not supported
+  # between instances of 'NoneType' and 'str'").
+  created_at = datetime(2026, 8, 1)
+  candidates = [{
+    "id": "insales-1",
+    "order_lines": [{"sku": None, "quantity": 1}],
+    "created_at": created_at,
+  }]
+  mpfit_orders = [{
+    "id": 1,
+    "created_at": "2026-08-01T00:00:00",
+    "items": [{"product": {"article": "ABC"}, "quantity": 1}],
+  }]
+  assert match_candidates(candidates, mpfit_orders) == {}
+
+
+def test_match_candidates_matches_normally_when_skus_present():
+  created_at = datetime(2026, 8, 1)
+  candidates = [{
+    "id": "insales-1",
+    "order_lines": [{"sku": "ABC", "quantity": 1}],
+    "created_at": created_at,
+  }]
+  mpfit_orders = [{
+    "id": 1,
+    "created_at": "2026-08-01T00:00:00",
+    "items": [{"product": {"article": "ABC"}, "quantity": 1}],
+  }]
+  assert match_candidates(candidates, mpfit_orders) == {"insales-1": 1}
