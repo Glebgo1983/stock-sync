@@ -1,8 +1,29 @@
+import os
 import re
-from datetime import datetime, timedelta
+import time
+import httpx
+from datetime import datetime, timedelta, timezone
 from api.mpfit_stock_client import mpfit_base_url, _post_with_retry
 
 MPFIT_ORDERS_PAGE_SIZE = 200
+
+# Optional external cache: a small always-on service (outside Vercel's 30s
+# cron-job.org budget) that polls mpFit's entire order history on its own
+# schedule and serves the last-known-good result over HTTPS. Added
+# 2026-08-21 after the direct full-history scan below (previously the only
+# path) grew to ~20-24s on its own -- combined with the other two scan
+# phases in run_kiz_sync, that regularly pushed the whole /api/sync-kiz run
+# past cron-job.org's 30s cap, silently auto-disabling the КИЗ sync job for
+# 16 days (2026-08-05 to 2026-08-21) with zero visibility. Both env vars
+# unset (the default, e.g. in Preview) means this is skipped entirely and
+# behavior is identical to before -- the cache is purely additive.
+KIZ_CACHE_URL = os.getenv("KIZ_CACHE_URL")
+KIZ_CACHE_SECRET = os.getenv("KIZ_CACHE_SECRET")
+
+# If the cache's own background refresh has stalled (its host down, mpFit
+# unreachable from there, etc.), don't trust arbitrarily old data forever --
+# fall back to the direct scan instead, same as any other cache failure.
+KIZ_CACHE_MAX_AGE_SECONDS = 1800
 
 # ApiShip encodes the inSales order's own display `number` into mpFit's
 # order `number` field for orders placed via Yandex Delivery, as
@@ -33,12 +54,15 @@ def _item_signature(items, sku_aliases=None):
   return tuple(sorted(pairs))
 
 
-async def fetch_all_mpfit_orders(client):
+async def _fetch_all_mpfit_orders_direct(client):
   """Page through mpFit's entire orders/list, unfiltered -- the `filter`
   param only supports matching by mpFit's own id (see resolve_order_numbers),
-  which is exactly what we don't know yet here. Confirmed cheap: mpFit's
-  whole order history was only ~15-16 pages of 200 (2026-07-27), safe to
-  scan in full on every sync run.
+  which is exactly what we don't know yet here. This was cheap when first
+  written (mpFit's whole order history was only ~15-16 pages of 200,
+  2026-07-27) but by 2026-08-21 had grown to ~21 pages / ~24s on its own --
+  see fetch_all_mpfit_orders below for the cache that now normally avoids
+  paying this cost on every run. Kept as the fallback when the cache is
+  unavailable or stale.
   """
   orders = []
   last_id = 0
@@ -52,6 +76,42 @@ async def fetch_all_mpfit_orders(client):
       break
     last_id = result["last_id"]
   return orders
+
+
+async def _fetch_from_cache():
+  if not KIZ_CACHE_URL or not KIZ_CACHE_SECRET:
+    return None
+  try:
+    # verify=False: the cache runs on a bare-IP VPS with a self-signed cert
+    # (no domain available) -- KIZ_CACHE_SECRET is what actually
+    # authenticates the response, TLS here is only for confidentiality of
+    # order data in transit, not identity verification.
+    async with httpx.AsyncClient(verify=False, timeout=8) as cache_client:
+      response = await cache_client.get(KIZ_CACHE_URL, params={"key": KIZ_CACHE_SECRET})
+    response.raise_for_status()
+    data = response.json()
+    updated_at = datetime.fromisoformat(data["updated_at"].replace("Z", "+00:00"))
+    age = (datetime.now(timezone.utc) - updated_at).total_seconds()
+    if age > KIZ_CACHE_MAX_AGE_SECONDS:
+      print(f"kiz orders cache stale ({age:.0f}s old), falling back to direct scan")
+      return None
+    return data["orders"]
+  except Exception as e:
+    print(f"kiz orders cache fetch failed, falling back to direct scan: {e}")
+    return None
+
+
+async def fetch_all_mpfit_orders(client):
+  """Returns mpFit's entire order history. Prefers the external cache (see
+  KIZ_CACHE_URL above) when configured and fresh; falls back to scanning
+  mpFit directly (_fetch_all_mpfit_orders_direct) otherwise, so this
+  degrades gracefully to the pre-cache behavior rather than failing the
+  whole sync run.
+  """
+  cached = await _fetch_from_cache()
+  if cached is not None:
+    return cached
+  return await _fetch_all_mpfit_orders_direct(client)
 
 
 def _build_signature_index(mpfit_orders, sku_aliases=None):

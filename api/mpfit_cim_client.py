@@ -25,7 +25,14 @@ CIM_CURSOR_REDIS_KEY = "mpfit_sync:kiz_cim_cursor"
 # If a run's real backlog is bigger than this, the cursor still advances as
 # far as it got and the next run picks up exactly there -- delayed, never
 # skipped.
-CIM_SCAN_MAX_PAGES = 40
+#
+# Lowered from 40 to 20 (2026-08-21): measured up to ~520ms/page against
+# real mpFit data, so 40 pages could cost up to ~21s on its own --
+# combined with the other two scan phases in run_kiz_sync (see
+# ORDER_SCAN_TAIL_MAX_PAGES), this was part of why the whole run kept
+# exceeding cron-job.org's 30s cap after the job's 16-day disabled backlog
+# (2026-08-05 to 2026-08-21). 20 pages costs up to ~10.4s worst case.
+CIM_SCAN_MAX_PAGES = 20
 
 # One-time bootstrap only, when no cursor has been saved yet (first deploy
 # of this mechanism, or a fresh Redis instance): start this far back from

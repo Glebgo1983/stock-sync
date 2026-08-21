@@ -28,8 +28,16 @@ ORDER_SCAN_RETRY_FLOOR_REDIS_KEY = "insales_sync:kiz_order_scan_retry_floor"
 # cron-job.org's 30s timeout and inSales rate limits. If a scan's window is
 # bigger than its budget, its cursor still advances as far as it got and
 # the next run resumes exactly there -- delayed, never skipped.
-ORDER_SCAN_TAIL_MAX_PAGES = 20
-ORDER_SCAN_RETRY_MAX_PAGES = 20
+#
+# Lowered from 20 to 8 (2026-08-21): measured ~680ms/page against real
+# inSales data, so 20+20=40 pages cost ~27s on its own -- combined with the
+# other two scan phases in run_kiz_sync, this was the main reason the whole
+# run kept exceeding cron-job.org's 30s cap after the 16-day backlog from
+# the job being disabled (2026-08-05 to 2026-08-21, see project memory).
+# 8+8=16 pages costs ~11s, leaving comfortable headroom; a bigger backlog
+# just takes proportionally more runs to catch up, same as before.
+ORDER_SCAN_TAIL_MAX_PAGES = 8
+ORDER_SCAN_RETRY_MAX_PAGES = 8
 
 # id of the "КИЗ" custom order field (Настройки -> Параметры заказов, type
 # Field::TextField). Created 2026-07-21, admin-only visibility confirmed via
