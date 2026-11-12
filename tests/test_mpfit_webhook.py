@@ -45,7 +45,7 @@ def test_parse_stock_event_no_id_anywhere():
   assert event["has_stock_data"] is True
 
 
-def test_parse_stock_event_smart_product_uses_can_collect():
+def test_parse_stock_event_does_not_use_can_collect_as_sellable_stock():
   body = {"id": 3, "article": "SKU-6", "stocks": [{"free": 0, "can_collect": 4}]}
   event = parse_stock_event(body)
-  assert event["qty"] == 4
+  assert event["qty"] == 0

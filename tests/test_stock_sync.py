@@ -18,11 +18,11 @@ def test_compute_available_qty_simple_product():
   assert compute_available_qty(stocks) == 8
 
 
-def test_compute_available_qty_smart_product_uses_can_collect():
+def test_compute_available_qty_ignores_can_collect_when_free_is_zero():
   stocks = [
     {"warehouse_id": 1, "free": 0, "booked": 0, "can_collect": 7},
   ]
-  assert compute_available_qty(stocks) == 7
+  assert compute_available_qty(stocks) == 0
 
 
 def test_compute_available_qty_handles_nulls_and_empty():

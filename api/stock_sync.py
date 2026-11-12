@@ -11,11 +11,6 @@ from api.sync_lock import sync_lock
 
 UNMATCHED_SKU_PREVIEW_LIMIT = 50
 EXCLUDED_SKU_PREVIEW_LIMIT = 50
-DIAGNOSTIC_SKUS = {
-  "82CICACREAM002",
-  "82BOX/НАБОР/46/ПК",
-  "82пакетмаленький22см",
-}
 
 
 def diff_variants(
@@ -229,21 +224,6 @@ async def _run_stock_sync_locked(dry_run: bool):
     + json.dumps(
       {
         **summary,
-        "diagnostic": {
-          sku: {
-            "mpfit": mpfit_stock["by_article"].get(sku),
-            "stocks": mpfit_stock.get("diagnostic_stocks", {}).get(sku),
-            "insales": [
-              {
-                "variant_id": variant["variant_id"],
-                "quantity": variant.get("quantity"),
-                "matched_quantity": matched.get(variant["variant_id"], {}).get("new_qty"),
-              }
-              for variant in insales_map.get(sku, [])
-            ],
-          }
-          for sku in sorted(DIAGNOSTIC_SKUS)
-        },
         "unmatched_skus": sorted(unmatched_skus)[:UNMATCHED_SKU_PREVIEW_LIMIT],
         "excluded_skus": excluded_skus[:EXCLUDED_SKU_PREVIEW_LIMIT],
       },
