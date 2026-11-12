@@ -232,6 +232,7 @@ async def _run_stock_sync_locked(dry_run: bool):
         "diagnostic": {
           sku: {
             "mpfit": mpfit_stock["by_article"].get(sku),
+            "stocks": mpfit_stock.get("diagnostic_stocks", {}).get(sku),
             "insales": [
               {
                 "variant_id": variant["variant_id"],

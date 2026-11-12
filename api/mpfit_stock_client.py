@@ -11,6 +11,11 @@ mpfit_headers = {"Authorization": f"Bearer {mpfit_token}", "Content-Type": "appl
 
 MPFIT_PAGE_LIMIT = 200
 MPFIT_RATE_LIMIT_PER_MINUTE = 60
+DIAGNOSTIC_ARTICLES = {
+  "82CICACREAM002",
+  "82BOX/НАБОР/46/ПК",
+  "82пакетмаленький22см",
+}
 
 _request_timestamps = []
 
@@ -71,6 +76,7 @@ async def fetch_stock_map(client):
   # doesn't need one).
   by_article = {}
   by_id = {}
+  diagnostic_stocks = {}
   last_id = 0
   while True:
     body = {"limit": MPFIT_PAGE_LIMIT, "last_id": last_id}
@@ -80,6 +86,8 @@ async def fetch_stock_map(client):
     for item in items:
       article = (item.get("article") or "").strip()
       qty = compute_available_qty(item.get("stocks"))
+      if article in DIAGNOSTIC_ARTICLES:
+        diagnostic_stocks[article] = item.get("stocks") or []
       item_id = item.get("product_id")
       mpfit_id = str(item_id) if item_id is not None else None
       if mpfit_id is not None:
@@ -90,4 +98,4 @@ async def fetch_stock_map(client):
     if len(items) < MPFIT_PAGE_LIMIT or result.get("last_id") is None:
       break
     last_id = result["last_id"]
-  return {"by_article": by_article, "by_id": by_id}
+  return {"by_article": by_article, "by_id": by_id, "diagnostic_stocks": diagnostic_stocks}
