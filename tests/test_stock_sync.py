@@ -77,10 +77,34 @@ def test_diff_variants_first_seen_product_matches_by_article_and_persists_link()
   assert matched[202]["new_qty"] == 0
   assert unmatched == ["SKU-MISSING"]
   assert excluded == []
-  assert stats == {"id_matched": 0, "article_matched": 3, "excluded": 0}
+  assert stats == {"id_matched": 0, "article_matched": 3, "excluded": 0, "conflicting_id_links": 0}
   assert new_links["m1"] == {
     "insales_variant_id": 101, "insales_product_id": 1, "sku": "SKU-1", "barcode": "111",
   }
+
+
+def test_diff_variants_repairs_conflicting_stale_id_link_with_direct_article_match():
+  # A stale/incorrect persisted link must not keep writing the quantity of a
+  # different mpFit product when the current literal SKU has a new match.
+  insales_map = {"SKU-1": [_variant(101, "SKU-1", quantity=3)]}
+  mpfit_stock = {
+    "by_article": {"SKU-1": {"qty": 10, "mpfit_id": "m2"}},
+    "by_id": {"m1": 0, "m2": 10},
+  }
+  product_map = {
+    "m1": {"insales_variant_id": 101, "insales_product_id": 1, "sku": "SKU-1", "barcode": None},
+  }
+
+  matched, unmatched, excluded, new_links, stats = diff_variants(
+    insales_map, mpfit_stock, product_map,
+  )
+
+  assert matched[101]["new_qty"] == 10
+  assert matched[101]["mpfit_id"] == "m2"
+  assert unmatched == []
+  assert excluded == []
+  assert stats == {"id_matched": 0, "article_matched": 1, "excluded": 0, "conflicting_id_links": 1}
+  assert new_links["m2"]["insales_variant_id"] == 101
 
 
 def test_diff_variants_prefers_persisted_id_link_even_if_article_changed():
@@ -99,7 +123,7 @@ def test_diff_variants_prefers_persisted_id_link_even_if_article_changed():
   assert matched[101]["mpfit_id"] == "m1"
   assert unmatched == []
   assert excluded == []
-  assert stats == {"id_matched": 1, "article_matched": 0, "excluded": 0}
+  assert stats == {"id_matched": 1, "article_matched": 0, "excluded": 0, "conflicting_id_links": 0}
   assert new_links == {}
 
 
@@ -114,7 +138,7 @@ def test_diff_variants_stale_link_falls_back_to_article_and_relinks():
   }
   matched, unmatched, excluded, new_links, stats = diff_variants(insales_map, mpfit_stock, product_map)
   assert matched[202]["new_qty"] == 6
-  assert stats == {"id_matched": 0, "article_matched": 1, "excluded": 0}
+  assert stats == {"id_matched": 0, "article_matched": 1, "excluded": 0, "conflicting_id_links": 0}
   assert new_links["m1"]["insales_variant_id"] == 202
 
 
@@ -150,7 +174,7 @@ def test_diff_variants_excludes_by_sku_even_with_persisted_id_link():
   assert unmatched == []
   assert excluded == ["SKU-1"]
   assert new_links == {}
-  assert stats == {"id_matched": 0, "article_matched": 0, "excluded": 1}
+  assert stats == {"id_matched": 0, "article_matched": 0, "excluded": 1, "conflicting_id_links": 0}
 
 
 def test_diff_variants_excludes_by_mpfit_id_on_first_seen_article_match():

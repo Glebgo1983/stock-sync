@@ -46,12 +46,26 @@ def diff_variants(
 
   matched = {}
   excluded = set()
+  conflicting_id_links = 0
   for mpfit_id, link in product_map.items():
     variant = insales_by_variant_id.get(link.get("insales_variant_id"))
     sku = variant.get("sku") if variant else link.get("sku")
     if mpfit_id in excluded_mpfit_ids or sku in excluded_skus:
       if sku:
         excluded.add(sku)
+      continue
+    # A persisted link is useful after an article/sku rename, but it must not
+    # override a current literal article match when the two mpFit IDs conflict.
+    # This repairs stale/incorrect links (including an old alias) instead of
+    # repeatedly pushing the quantity from the wrong mpFit product.
+    direct_entry = by_article.get(sku) if sku else None
+    direct_mpfit_id = direct_entry.get("mpfit_id") if direct_entry else None
+    if (
+      variant is not None
+      and direct_mpfit_id is not None
+      and str(direct_mpfit_id) != str(mpfit_id)
+    ):
+      conflicting_id_links += 1
       continue
     qty = by_id.get(mpfit_id)
     if variant is None or qty is None:
@@ -107,6 +121,7 @@ def diff_variants(
     "id_matched": id_matched_count,
     "article_matched": len(matched) - id_matched_count,
     "excluded": len(excluded),
+    "conflicting_id_links": conflicting_id_links,
   }
   return matched, unmatched_skus, sorted(excluded), new_links, stats
 
@@ -156,7 +171,14 @@ async def _run_stock_sync_locked(dry_run: bool):
     batches = []
     entries = []
     if not dry_run and matched:
-      quantities = {variant_id: info["new_qty"] for variant_id, info in matched.items()}
+      # Avoid unnecessary writes and timestamps in inSales. A full catalog is
+      # still fetched above, so every changed quantity is reconciled on every
+      # scheduled run.
+      quantities = {
+        variant_id: info["new_qty"]
+        for variant_id, info in matched.items()
+        if info.get("previous_qty") != info["new_qty"]
+      }
       batches = await push_quantities(client, quantities)
       entries = _build_journal_entries(matched, batches)
 
@@ -170,8 +192,12 @@ async def _run_stock_sync_locked(dry_run: bool):
     "mpfit_products_with_id": len(mpfit_stock["by_id"]),
     "insales_skus": len(insales_map),
     "matched_variants": len(matched),
+    "changed_variants": sum(
+      1 for info in matched.values() if info.get("previous_qty") != info.get("new_qty")
+    ),
     "id_matched_variants": match_stats["id_matched"],
     "article_matched_variants": match_stats["article_matched"],
+    "conflicting_id_links": match_stats["conflicting_id_links"],
     "unmatched_count": len(unmatched_skus),
     "excluded_count": match_stats["excluded"],
     "success_count": sum(1 for e in entries if e["result"] == "ok"),
