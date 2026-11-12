@@ -1,3 +1,4 @@
+import json
 import time
 from datetime import datetime, timezone
 import httpx
@@ -217,6 +218,18 @@ async def _run_stock_sync_locked(dry_run: bool):
         save_links(new_links)
       except Exception as e:
         print(f"product map save failed: {e}")
+
+  print(
+    "stock sync summary: "
+    + json.dumps(
+      {
+        **summary,
+        "unmatched_skus": sorted(unmatched_skus)[:UNMATCHED_SKU_PREVIEW_LIMIT],
+        "excluded_skus": excluded_skus[:EXCLUDED_SKU_PREVIEW_LIMIT],
+      },
+      ensure_ascii=False,
+    )
+  )
 
   return {
     **summary,
